@@ -2,6 +2,22 @@
 
 VPS infrastructure management panel. One panel — all your servers.
 
+## Install Master (one command)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Beykus-Y/Admin_vps/main/scripts/install-master.sh | sudo bash
+```
+
+The script will:
+1. Install Docker (if not present)
+2. Ask for your domain/IP and admin credentials
+3. Download configs, generate `JWT_SECRET`
+4. Pull images from ghcr.io, run migrations, start services
+5. Create admin user
+6. Register `filincontrol.service` (auto-start on reboot)
+
+---
+
 ## Quick Start (local build)
 
 ```bash
