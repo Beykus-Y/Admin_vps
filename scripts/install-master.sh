@@ -6,7 +6,7 @@ GITHUB_REPO="Beykus-Y/Admin_vps"
 RAW_BASE="https://raw.githubusercontent.com/${GITHUB_REPO}/main"
 INSTALL_DIR="/opt/filincontrol"
 COMPOSE_FILE="${INSTALL_DIR}/docker-compose.yml"
-COMPOSE_OVERRIDE="${INSTALL_DIR}/docker-compose.override.yml"
+COMPOSE_OVERRIDE=""
 CADDYFILE="${INSTALL_DIR}/caddy/Caddyfile"
 ENV_FILE="${INSTALL_DIR}/.env"
 
@@ -164,6 +164,7 @@ EOF
   ok "Caddyfile written ($([ "$USE_TLS" == true ] && echo "HTTPS" || echo "HTTP"))"
 else
   # External proxy: expose API (8000) and web (3000) on localhost and disable caddy container
+  COMPOSE_OVERRIDE="${INSTALL_DIR}/docker-compose.override.yml"
   cat > "${COMPOSE_OVERRIDE}" <<EOF
 # Auto-generated: external proxy detected (${PROXY_PROC})
 # Exposes API and web ports to host, disables Caddy container.

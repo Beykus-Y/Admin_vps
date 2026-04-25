@@ -1,10 +1,6 @@
 name: Deploy to Master VPS
 
 on:
-  workflow_run:
-    workflows: ["Build & Push Docker Images"]
-    types: [completed]
-    branches: [main]
   workflow_dispatch:
 
 jobs:
