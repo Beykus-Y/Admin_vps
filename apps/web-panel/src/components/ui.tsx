@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import type { HTMLAttributes, ReactNode } from "react";
 import clsx from "clsx";
 import { severityLabel, statusLabel } from "@/lib/format";
 
@@ -51,7 +51,12 @@ export function StatusDot({ status, size = 8 }: { status: string | null | undefi
   );
 }
 
-export function Pill({ children, color = "gray", className }: { children: ReactNode; color?: "green" | "red" | "blue" | "purple" | "yellow" | "gray"; className?: string }) {
+export function Pill({
+  children,
+  color = "gray",
+  className,
+  ...props
+}: HTMLAttributes<HTMLSpanElement> & { children: ReactNode; color?: "green" | "red" | "blue" | "purple" | "yellow" | "gray" }) {
   const styles = {
     green: "bg-[#4ade80]/10 text-[#4ade80] border-[#4ade80]/15",
     red: "bg-[#f87171]/10 text-[#f87171] border-[#f87171]/15",
@@ -61,7 +66,7 @@ export function Pill({ children, color = "gray", className }: { children: ReactN
     gray: "bg-[#1a1d2e] text-[#4a5170] border-[#252a40]",
   }[color];
 
-  return <span className={clsx("inline-flex items-center rounded border px-2 py-0.5 font-mono text-[10px]", styles, className)}>{children}</span>;
+  return <span {...props} className={clsx("inline-flex items-center rounded border px-2 py-0.5 font-mono text-[10px]", styles, className)}>{children}</span>;
 }
 
 export function SeverityBadge({ severity }: { severity: string | null | undefined }) {
@@ -106,21 +111,34 @@ export function SparkBars({ values, color = "#4ade80", className }: { values: nu
   );
 }
 
-export function LineChart({ values, color = "#4ade80", className }: { values: Array<number | null | undefined>; color?: string; className?: string }) {
+export function LineChart({
+  values,
+  color = "#4ade80",
+  className,
+  minValue,
+  maxValue,
+}: {
+  values: Array<number | null | undefined>;
+  color?: string;
+  className?: string;
+  minValue?: number;
+  maxValue?: number;
+}) {
   const points = values.map((value, index) => ({ x: index, y: value ?? null })).filter((point) => point.y != null) as Array<{ x: number; y: number }>;
   if (points.length === 0) {
     return <div className={clsx("flex h-24 items-center justify-center rounded-lg bg-[#0c0e16] font-mono text-xs text-[#2a3355]", className)}>нет истории</div>;
   }
 
-  const max = Math.max(...points.map((point) => point.y), 1);
-  const min = Math.min(...points.map((point) => point.y), 0);
+  const max = maxValue ?? Math.max(...points.map((point) => point.y), 1);
+  const min = minValue ?? Math.min(...points.map((point) => point.y), 0);
   const range = Math.max(max - min, 1);
   const width = 100;
   const height = 48;
   const polyline = points
     .map((point) => {
+      const clampedY = Math.max(min, Math.min(max, point.y));
       const x = points.length === 1 ? 0 : (point.x / (values.length - 1 || 1)) * width;
-      const y = height - ((point.y - min) / range) * height;
+      const y = height - ((clampedY - min) / range) * height;
       return `${x},${y}`;
     })
     .join(" ");

@@ -79,7 +79,9 @@ async def enroll(body: EnrollRequest, db: DB):
 @router.post("/heartbeat", status_code=204)
 async def heartbeat(body: HeartbeatRequest, node: AgentNode, db: DB):
     now = datetime.now(UTC)
-    was_offline = node.status == "offline"
+    previous_status = node.status
+    previous_version = node.agent_version
+    previous_capabilities = node.capabilities or []
 
     node.last_seen_at = now
     node.status = "online"
@@ -88,7 +90,11 @@ async def heartbeat(body: HeartbeatRequest, node: AgentNode, db: DB):
     if body.capabilities:
         node.capabilities = body.capabilities
 
-    if was_offline:
+    status_changed = previous_status != "online"
+    version_changed = bool(body.agent_version and body.agent_version != previous_version)
+    capabilities_changed = bool(body.capabilities and body.capabilities != previous_capabilities)
+
+    if previous_status == "offline":
         db.add(Event(
             node_id=node.id,
             severity="info",
@@ -113,7 +119,8 @@ async def heartbeat(body: HeartbeatRequest, node: AgentNode, db: DB):
             ]
             if channel_payloads:
                 await dispatch_channels(channel_payloads, notification_payload(envelope))
-    await publish_event("inventory.changed", {"node_id": str(node.id), "status": node.status})
+    if status_changed or version_changed or capabilities_changed:
+        await publish_event("inventory.changed", {"node_id": str(node.id), "status": node.status, "action": "heartbeat_changed"})
 
 
 @router.post("/snapshot", status_code=204)

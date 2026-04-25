@@ -3,7 +3,18 @@
 import { useEffect, useRef } from "react";
 import { api } from "@/lib/api";
 
-export function useLiveReload(enabled: boolean, onReload: () => void, delayMs = 1200) {
+export interface LiveEvent {
+  type: string;
+  payload: Record<string, unknown>;
+  created_at?: string;
+}
+
+export function useLiveReload(
+  enabled: boolean,
+  onReload: () => void,
+  delayMs = 1200,
+  shouldReload?: (event: LiveEvent) => boolean
+) {
   const timerRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -12,7 +23,14 @@ export function useLiveReload(enabled: boolean, onReload: () => void, delayMs = 
     if (!url) return;
 
     const stream = new EventSource(url);
-    stream.onmessage = () => {
+    stream.onmessage = (message) => {
+      let event: LiveEvent;
+      try {
+        event = JSON.parse(message.data) as LiveEvent;
+      } catch {
+        return;
+      }
+      if (shouldReload && !shouldReload(event)) return;
       if (timerRef.current) window.clearTimeout(timerRef.current);
       timerRef.current = window.setTimeout(() => onReload(), delayMs);
     };
@@ -21,5 +39,5 @@ export function useLiveReload(enabled: boolean, onReload: () => void, delayMs = 
       if (timerRef.current) window.clearTimeout(timerRef.current);
       stream.close();
     };
-  }, [enabled, onReload, delayMs]);
+  }, [enabled, onReload, delayMs, shouldReload]);
 }

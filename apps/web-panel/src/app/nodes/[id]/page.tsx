@@ -8,7 +8,7 @@ import { api, Container, isAgentOutdated, Node, NodeEvent, NodeMetric, Port, Tas
 import { useAuth } from "@/lib/auth";
 import { formatBytes, formatDateTime, formatFullDateTime, formatPercent, formatRelativeTime, formatUptime, statusLabel, taskTypeLabel } from "@/lib/format";
 import { isMasterNode } from "@/lib/inventory";
-import { useLiveReload } from "@/lib/live";
+import { type LiveEvent, useLiveReload } from "@/lib/live";
 import { Card, DataTable, LineChart, MetricBar, Pill, SectionTitle, SeverityBadge, SoftButton, StatusDot, StatusPill } from "@/components/ui";
 
 type Tab = "overview" | "docker" | "ports" | "tasks" | "events";
@@ -36,9 +36,33 @@ function percent(used: number | null | undefined, total: number | null | undefin
 function InfoRow({ label, value }: { label: string; value: React.ReactNode }) {
   if (!value) return null;
   return (
-    <div className="flex justify-between gap-4 text-sm">
+    <div className="flex items-start justify-between gap-4 text-sm">
       <span className="shrink-0 text-[#4a5170]">{label}</span>
-      <span className="text-right text-[#dde2f0] break-all">{value}</span>
+      <span className="min-w-0 text-right text-[#dde2f0] break-words">{value}</span>
+    </div>
+  );
+}
+
+function CapabilityList({ capabilities }: { capabilities: string[] }) {
+  if (capabilities.length === 0) return <>наследуемая совместимость</>;
+  const visible = capabilities.slice(0, 6);
+  const hiddenCount = capabilities.length - visible.length;
+  return (
+    <span className="inline-flex max-w-[620px] flex-wrap justify-end gap-1">
+      {visible.map((capability) => (
+        <Pill key={capability} color="gray" className="max-w-[210px] truncate" title={capability}>
+          {taskTypeLabel(capability)}
+        </Pill>
+      ))}
+      {hiddenCount > 0 && <Pill color="gray">+{hiddenCount}</Pill>}
+    </span>
+  );
+}
+
+function TabPanel({ active, children }: { active: boolean; children: React.ReactNode }) {
+  return (
+    <div className={active ? "block" : "hidden"}>
+      {children}
     </div>
   );
 }
@@ -76,6 +100,7 @@ export default function NodeDetailPage() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [events, setEvents] = useState<NodeEvent[]>([]);
   const [tab, setTab] = useState<Tab>("overview");
+  const [visitedTabs, setVisitedTabs] = useState<Set<Tab>>(() => new Set(["overview"]));
   const [taskLoading, setTaskLoading] = useState<string | null>(null);
   const [versionInfo, setVersionInfo] = useState<VersionInfo | null>(null);
   const [updateLoading, setUpdateLoading] = useState(false);
@@ -102,11 +127,27 @@ export default function NodeDetailPage() {
     }
   }, [id, router]);
 
+  const shouldReloadLiveEvent = useCallback((event: LiveEvent) => {
+    if (event.type !== "inventory.changed" && event.type !== "tasks.changed") return false;
+    const eventNodeId = event.payload?.node_id;
+    return typeof eventNodeId !== "string" || eventNodeId === id;
+  }, [id]);
+
   useEffect(() => { void load(); }, [load]);
   useEffect(() => {
     api.version().then(setVersionInfo).catch(() => null);
   }, []);
-  useLiveReload(Boolean(node), load);
+  useLiveReload(Boolean(node), load, 1200, shouldReloadLiveEvent);
+
+  function selectTab(nextTab: Tab) {
+    setTab(nextTab);
+    setVisitedTabs((previous) => {
+      if (previous.has(nextTab)) return previous;
+      const next = new Set(previous);
+      next.add(nextTab);
+      return next;
+    });
+  }
 
   async function handleUpdateAgent() {
     setUpdateLoading(true);
@@ -207,16 +248,19 @@ export default function NodeDetailPage() {
         <div className="flex gap-1 overflow-x-auto border-b border-[#1a1d2e]">
           {(Object.keys(TAB_LABELS) as Tab[]).map((item) => (
             <button
+              type="button"
               key={item}
-              onClick={() => setTab(item)}
-              className={`-mb-px whitespace-nowrap border-b-2 px-4 py-2 text-sm font-semibold transition ${tab === item ? "border-[#4ade80] text-[#4ade80]" : "border-transparent text-[#4a5170] hover:text-[#dde2f0]"}`}
+              onClick={() => selectTab(item)}
+              aria-selected={tab === item}
+              className={`-mb-px whitespace-nowrap border-b-2 px-4 py-2 text-sm font-semibold transition ${tab === item ? "border-[#4ade80] text-[#4ade80]" : "border-transparent text-[#5d6684] hover:text-[#dde2f0]"}`}
             >
               {TAB_LABELS[item]}
             </button>
           ))}
         </div>
 
-        {tab === "overview" && (
+        {visitedTabs.has("overview") && (
+          <TabPanel active={tab === "overview"}>
           <div className="grid gap-4 xl:grid-cols-2">
             <Card className="p-5">
               <SectionTitle>Система</SectionTitle>
@@ -232,7 +276,7 @@ export default function NodeDetailPage() {
                 <InfoRow label="Локальные IP" value={formatLocalIPs(node.local_ips)} />
                 <InfoRow label="Провайдер" value={node.provider} />
                 <InfoRow label="Локация" value={node.location} />
-                <InfoRow label="Возможности" value={node.capabilities.length ? node.capabilities.join(", ") : "наследуемая совместимость"} />
+                <InfoRow label="Возможности" value={<CapabilityList capabilities={node.capabilities} />} />
               </div>
             </Card>
 
@@ -246,15 +290,15 @@ export default function NodeDetailPage() {
                   <div className="grid gap-3 md:grid-cols-3">
                     <div>
                       <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.14em] text-[#2a3355]">CPU 24ч</div>
-                      <LineChart values={history.map((point) => point.cpu_percent)} color="#38bdf8" />
+                      <LineChart values={history.map((point) => point.cpu_percent)} color="#38bdf8" minValue={0} maxValue={100} />
                     </div>
                     <div>
                       <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.14em] text-[#2a3355]">RAM 24ч</div>
-                      <LineChart values={ramHistory} color="#fbbf24" />
+                      <LineChart values={ramHistory} color="#fbbf24" minValue={0} maxValue={100} />
                     </div>
                     <div>
                       <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.14em] text-[#2a3355]">Disk 24ч</div>
-                      <LineChart values={diskHistory} color="#a78bfa" />
+                      <LineChart values={diskHistory} color="#a78bfa" minValue={0} maxValue={100} />
                     </div>
                   </div>
                   <div className="grid grid-cols-2 gap-3 pt-2 font-mono text-xs text-[#4a5170]">
@@ -279,9 +323,11 @@ export default function NodeDetailPage() {
               </div>
             </Card>
           </div>
+          </TabPanel>
         )}
 
-        {tab === "docker" && (
+        {visitedTabs.has("docker") && (
+          <TabPanel active={tab === "docker"}>
           <DataTable
             rows={containers}
             emptyText="Контейнеры не найдены"
@@ -301,9 +347,11 @@ export default function NodeDetailPage() {
               ) },
             ]}
           />
+          </TabPanel>
         )}
 
-        {tab === "ports" && (
+        {visitedTabs.has("ports") && (
+          <TabPanel active={tab === "ports"}>
           <DataTable
             rows={ports}
             emptyText="Открытые порты не найдены"
@@ -318,9 +366,11 @@ export default function NodeDetailPage() {
               { key: "seen", label: "Когда", render: (row) => formatDateTime(row.last_seen_at) },
             ]}
           />
+          </TabPanel>
         )}
 
-        {tab === "tasks" && (
+        {visitedTabs.has("tasks") && (
+          <TabPanel active={tab === "tasks"}>
           <DataTable
             rows={tasks}
             emptyText="Задач пока нет"
@@ -332,9 +382,11 @@ export default function NodeDetailPage() {
               { key: "created", label: "Создана", render: (row) => <span title={formatFullDateTime(row.created_at)}>{formatDateTime(row.created_at)}</span> },
             ]}
           />
+          </TabPanel>
         )}
 
-        {tab === "events" && (
+        {visitedTabs.has("events") && (
+          <TabPanel active={tab === "events"}>
           <DataTable
             rows={events}
             emptyText="Событий нет"
@@ -344,6 +396,7 @@ export default function NodeDetailPage() {
               { key: "created", label: "Когда", render: (row) => <span title={formatFullDateTime(row.created_at)}>{formatRelativeTime(row.created_at)}</span> },
             ]}
           />
+          </TabPanel>
         )}
       </div>
     </Layout>
