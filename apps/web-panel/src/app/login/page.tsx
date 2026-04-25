@@ -1,6 +1,8 @@
 "use client";
+
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { Loader2, LockKeyhole } from "lucide-react";
 import { api } from "@/lib/api";
 
 export default function LoginPage() {
@@ -10,8 +12,8 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
+  async function handleSubmit(event: React.FormEvent) {
+    event.preventDefault();
     setError("");
     setLoading(true);
     try {
@@ -19,48 +21,56 @@ export default function LoginPage() {
       localStorage.setItem("token", res.access_token);
       router.push("/dashboard");
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Login failed");
+      setError(err instanceof Error ? err.message : "Не удалось войти");
     } finally {
       setLoading(false);
     }
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-[#0f1117]">
-      <div className="w-full max-w-sm">
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[#0c0e16] p-4 text-[#dde2f0]">
+      <div className="absolute left-1/2 top-[-20%] h-[520px] w-[520px] -translate-x-1/2 rounded-full bg-[#4ade80]/10 blur-[110px]" />
+      <div className="absolute bottom-[-20%] right-[-10%] h-[420px] w-[420px] rounded-full bg-[#38bdf8]/10 blur-[120px]" />
+
+      <div className="relative w-full max-w-md">
         <div className="mb-8 text-center">
-          <h1 className="text-2xl font-bold text-white tracking-tight">FilinControl</h1>
-          <p className="text-[#64748b] text-sm mt-1">Infrastructure Management Panel</p>
+          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl border border-[#1d2135] bg-[#111420] text-[#4ade80] shadow-[0_18px_55px_rgba(0,0,0,0.25)]">
+            <LockKeyhole size={22} />
+          </div>
+          <h1 className="font-mono text-2xl font-semibold tracking-[0.08em] text-[#4ade80]">Filin<span className="font-normal text-[#2a3355]">Control</span></h1>
+          <p className="mt-2 text-sm text-[#4a5170]">Панель управления VPS-инфраструктурой</p>
         </div>
-        <form onSubmit={handleSubmit} className="bg-[#1a1d27] border border-[#2a2d3e] rounded-lg p-6 space-y-4">
+
+        <form onSubmit={handleSubmit} className="space-y-4 rounded-2xl border border-[#1d2135] bg-[#111420]/95 p-6 shadow-[0_24px_90px_rgba(0,0,0,0.42)] backdrop-blur">
           <div>
-            <label className="block text-xs text-[#64748b] mb-1">Username</label>
+            <label className="mb-1.5 block font-mono text-[10px] uppercase tracking-[0.14em] text-[#4a5170]">Логин</label>
             <input
               type="text"
               value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              className="w-full bg-[#0f1117] border border-[#2a2d3e] rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-[#0ea5e9]"
+              onChange={(event) => setUsername(event.target.value)}
+              className="w-full rounded-lg border border-[#1d2135] bg-[#0c0e16] px-3 py-3 text-sm text-[#dde2f0] outline-none transition placeholder:text-[#2a3355] focus:border-[#4ade80]/70"
               required
               autoFocus
             />
           </div>
           <div>
-            <label className="block text-xs text-[#64748b] mb-1">Password</label>
+            <label className="mb-1.5 block font-mono text-[10px] uppercase tracking-[0.14em] text-[#4a5170]">Пароль</label>
             <input
               type="password"
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full bg-[#0f1117] border border-[#2a2d3e] rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-[#0ea5e9]"
+              onChange={(event) => setPassword(event.target.value)}
+              className="w-full rounded-lg border border-[#1d2135] bg-[#0c0e16] px-3 py-3 text-sm text-[#dde2f0] outline-none transition placeholder:text-[#2a3355] focus:border-[#4ade80]/70"
               required
             />
           </div>
-          {error && <p className="text-red-400 text-xs">{error}</p>}
+          {error && <p className="rounded-lg border border-[#f87171]/20 bg-[#f87171]/10 px-3 py-2 font-mono text-xs text-[#f87171]">{error}</p>}
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-[#0ea5e9] hover:bg-[#0284c7] text-white py-2 rounded text-sm font-medium transition-colors disabled:opacity-50"
+            className="flex w-full items-center justify-center gap-2 rounded-lg border border-[#4ade80]/60 bg-[#4ade80] px-4 py-3 text-sm font-bold text-[#06110a] transition hover:bg-[#63ef93] disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {loading ? "Signing in..." : "Sign in"}
+            {loading && <Loader2 size={16} className="animate-spin" />}
+            {loading ? "Вхожу..." : "Войти"}
           </button>
         </form>
       </div>

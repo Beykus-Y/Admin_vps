@@ -47,6 +47,9 @@ desktop.ini
 *.swp
 *.swo
 
+# ── Local design references ─────────────────────────────
+ONLY READ/
+
 # ── Secrets ─────────────────────────────────────────────
 *.pem
 *.key
