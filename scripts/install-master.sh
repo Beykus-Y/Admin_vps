@@ -82,6 +82,9 @@ echo "  Examples: panel.example.com  |  1.2.3.4  |  localhost"
 echo ""
 read -rp "  Domain/IP: " HOST </dev/tty
 [[ -z "$HOST" ]] && die "Domain/IP is required"
+# Strip http(s):// prefix and trailing slashes
+HOST="${HOST#http://}"; HOST="${HOST#https://}"; HOST="${HOST%%/*}"
+[[ -z "$HOST" ]] && die "Domain/IP is required"
 
 # IP/localhost → no TLS
 USE_TLS=true
@@ -199,15 +202,14 @@ set +e
 _MIGRATE_EXIT=$?
 set -e
 if [[ $_MIGRATE_EXIT -ne 0 ]]; then
-  warn "Migration container exited with code $_MIGRATE_EXIT — checking DB..."
-  # Compose sometimes returns non-zero even on success; verify by re-running
-  "${DC[@]}" run --rm migrate 2>/dev/null && true
+  warn "Migration container exited with code $_MIGRATE_EXIT — retrying..."
+  "${DC[@]}" run --rm migrate 2>/dev/null || true
 fi
 ok "Migrations complete"
 
 # ── Step 6: Start ─────────────────────────────────────────────────────────────
 info "[6/6] Starting services..."
-"${DC[@]}" up -d --remove-orphans
+"${DC[@]}" up -d --remove-orphans || die "docker compose up failed — run: ${DC[*]} logs"
 ok "Services started"
 
 # ── Wait for API ──────────────────────────────────────────────────────────────
