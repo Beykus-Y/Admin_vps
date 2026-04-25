@@ -230,10 +230,24 @@ async def snapshot(body: SnapshotRequest, node: AgentNode, db: DB):
 
 @router.get("/tasks", response_model=list[TaskOut])
 async def get_tasks(node: AgentNode, db: DB):
+    now = datetime.now(UTC)
+    retry_after = now - timedelta(minutes=15)
     result = await db.execute(
-        select(Task).where(Task.node_id == node.id, Task.status == "pending")
+        select(Task)
+        .where(
+            Task.node_id == node.id,
+            (Task.status == "pending")
+            | ((Task.status == "running") & (Task.started_at < retry_after)),
+        )
+        .order_by(Task.created_at.asc())
+        .limit(1)
     )
     tasks = result.scalars().all()
+    for task in tasks:
+        task.status = "running"
+        task.started_at = now
+    if tasks:
+        await db.commit()
     return [TaskOut(id=str(t.id), type=t.type, payload=t.payload) for t in tasks]
 
 

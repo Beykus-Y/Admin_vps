@@ -55,6 +55,7 @@ func main() {
 	collectTick := time.NewTicker(time.Duration(cfg.CollectIntervalSeconds) * time.Second)
 	taskTick := time.NewTicker(time.Duration(cfg.TaskPollIntervalSeconds) * time.Second)
 	heartbeatTick := time.NewTicker(8 * time.Second)
+	taskProcessing := make(chan struct{}, 1)
 
 	for {
 		select {
@@ -73,7 +74,13 @@ func main() {
 			}()
 
 		case <-taskTick.C:
+			select {
+			case taskProcessing <- struct{}{}:
+			default:
+				continue
+			}
 			go func() {
+				defer func() { <-taskProcessing }()
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 				defer cancel()
 				processTasks(ctx, c)
