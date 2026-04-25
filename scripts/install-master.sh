@@ -131,6 +131,7 @@ if ! docker compose version &>/dev/null 2>&1; then
   fi
 fi
 ok "Docker Compose available"
+DOCKER_BIN="$(command -v docker)"
 
 # ── Step 2: Create install dir + download files ───────────────────────────────
 info "[2/6] Setting up ${INSTALL_DIR}..."
@@ -140,12 +141,26 @@ ok "docker-compose.yml → ${COMPOSE_FILE}"
 
 # ── Step 3: Config ────────────────────────────────────────────────────────────
 info "[3/6] Generating configuration..."
-JWT_SECRET=$(openssl rand -hex 32)
-cat > "${ENV_FILE}" <<EOF
+EXISTING_JWT_SECRET=""
+if [[ -f "${ENV_FILE}" ]]; then
+  EXISTING_JWT_SECRET="$(grep '^JWT_SECRET=' "${ENV_FILE}" | head -1 | cut -d= -f2- || true)"
+fi
+
+if [[ -n "${EXISTING_JWT_SECRET}" ]]; then
+  JWT_SECRET="${EXISTING_JWT_SECRET}"
+  ok "Existing JWT_SECRET reused → ${ENV_FILE}"
+else
+  JWT_SECRET=$(openssl rand -hex 32)
+  if [[ -f "${ENV_FILE}" ]]; then
+    printf '\nJWT_SECRET=%s\n' "${JWT_SECRET}" >> "${ENV_FILE}"
+  else
+    cat > "${ENV_FILE}" <<EOF
 JWT_SECRET=${JWT_SECRET}
 EOF
+  fi
+  ok "JWT_SECRET generated → ${ENV_FILE}"
+fi
 chmod 600 "${ENV_FILE}"
-ok "JWT_SECRET generated → ${ENV_FILE}"
 
 # Write Compose override depending on proxy situation
 if [[ "$USE_CADDY_CONTAINER" == true ]]; then
@@ -197,13 +212,9 @@ ok "Images pulled"
 
 # ── Step 5: Migrations ────────────────────────────────────────────────────────
 info "[5/6] Running database migrations..."
-set +e
-"${DC[@]}" run --rm migrate
-_MIGRATE_EXIT=$?
-set -e
-if [[ $_MIGRATE_EXIT -ne 0 ]]; then
-  warn "Migration container exited with code $_MIGRATE_EXIT — retrying..."
-  "${DC[@]}" run --rm migrate 2>/dev/null || true
+if ! "${DC[@]}" run --rm -T migrate </dev/null; then
+  warn "Migration container failed — retrying once..."
+  "${DC[@]}" run --rm -T migrate </dev/null || die "Database migrations failed — run: ${DC[*]} logs postgres"
 fi
 ok "Migrations complete"
 
@@ -214,30 +225,71 @@ ok "Services started"
 
 # ── Wait for API ──────────────────────────────────────────────────────────────
 info "Waiting for API..."
-for i in $(seq 1 30); do
-  if curl -sf http://localhost:8000/health &>/dev/null; then
-    ok "API is up"; break
+api_healthcheck() {
+  "${DC[@]}" exec -T api python -c 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8000/health", timeout=2).read()' </dev/null >/dev/null 2>&1
+}
+
+API_READY=false
+for i in $(seq 1 60); do
+  if api_healthcheck; then
+    API_READY=true
+    ok "API is up"
+    break
   fi
-  [[ $i -eq 30 ]] && { warn "API slow to start — continuing anyway"; break; }
   sleep 2
 done
+[[ "${API_READY}" == true ]] || die "API did not become healthy — run: ${DC[*]} logs api"
 
 # ── Create admin user ─────────────────────────────────────────────────────────
 info "Creating admin user '${ADMIN_USER}'..."
-HTTP_STATUS=$(curl -s -o /tmp/fc_init.json -w "%{http_code}" \
-  -X POST http://localhost:8000/api/auth/init \
-  -H "Content-Type: application/json" \
-  -d "{\"username\":\"${ADMIN_USER}\",\"password\":\"${ADMIN_PASS}\"}")
+set +e
+INIT_RESPONSE=$("${DC[@]}" exec -T \
+  -e FC_ADMIN_USER="${ADMIN_USER}" \
+  -e FC_ADMIN_PASS="${ADMIN_PASS}" \
+  api python -c '
+import json
+import os
+import sys
+import urllib.error
+import urllib.request
+
+payload = json.dumps({
+    "username": os.environ["FC_ADMIN_USER"],
+    "password": os.environ["FC_ADMIN_PASS"],
+}).encode("utf-8")
+request = urllib.request.Request(
+    "http://127.0.0.1:8000/api/auth/init",
+    data=payload,
+    headers={"Content-Type": "application/json"},
+    method="POST",
+)
+
+try:
+    with urllib.request.urlopen(request, timeout=10) as response:
+        print(response.status)
+        print(response.read().decode("utf-8", "replace"))
+except urllib.error.HTTPError as exc:
+    print(exc.code)
+    print(exc.read().decode("utf-8", "replace"))
+except Exception as exc:
+    print(f"{type(exc).__name__}: {exc}", file=sys.stderr)
+    sys.exit(2)
+' </dev/null 2>&1)
+_INIT_EXIT=$?
+set -e
+
+[[ $_INIT_EXIT -eq 0 ]] || die "Could not create admin user: ${INIT_RESPONSE}"
+HTTP_STATUS="$(printf '%s\n' "${INIT_RESPONSE}" | sed -n '1p')"
+HTTP_BODY="$(printf '%s\n' "${INIT_RESPONSE}" | sed '1d')"
 
 case "$HTTP_STATUS" in
   200) ok "Admin user '${ADMIN_USER}' created" ;;
   403) warn "Admin already exists — skipping" ;;
-  *)   warn "Unexpected response ${HTTP_STATUS}: $(cat /tmp/fc_init.json 2>/dev/null)" ;;
+  *)   die "Unexpected admin init response ${HTTP_STATUS}: ${HTTP_BODY}" ;;
 esac
-rm -f /tmp/fc_init.json
 
 # ── systemd service ───────────────────────────────────────────────────────────
-COMPOSE_CMD="docker compose -f ${COMPOSE_FILE}"
+COMPOSE_CMD="${DOCKER_BIN} compose -f ${COMPOSE_FILE}"
 [[ -f "${COMPOSE_OVERRIDE}" ]] && COMPOSE_CMD+=" -f ${COMPOSE_OVERRIDE}"
 COMPOSE_CMD+=" --env-file ${ENV_FILE}"
 
@@ -251,8 +303,8 @@ Requires=docker.service
 Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=${INSTALL_DIR}
-ExecStart=/usr/bin/${COMPOSE_CMD} up -d --remove-orphans
-ExecStop=/usr/bin/${COMPOSE_CMD} down
+ExecStart=${COMPOSE_CMD} up -d --remove-orphans
+ExecStop=${COMPOSE_CMD} down
 TimeoutStartSec=120
 
 [Install]
