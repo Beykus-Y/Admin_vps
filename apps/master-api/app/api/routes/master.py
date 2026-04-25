@@ -1,9 +1,11 @@
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
 
-from app.api.deps import DB, CurrentUser
+from app.api.deps import CurrentAdmin, DB
 from app.db.models import Event, Node, Task
 from app.schemas.task import TaskOutFull
+from app.services.audit import log_action
+from app.services.realtime import publish_event
 
 router = APIRouter(prefix="/master", tags=["master"])
 
@@ -14,7 +16,7 @@ def is_master_node(node: Node) -> bool:
 
 
 @router.post("/update", response_model=TaskOutFull, status_code=201)
-async def update_master(_: CurrentUser, db: DB):
+async def update_master(user: CurrentAdmin, db: DB):
     result = await db.execute(select(Node).where(Node.status == "online").order_by(Node.last_seen_at.desc()))
     master_node = next((node for node in result.scalars().all() if is_master_node(node)), None)
     if not master_node:
@@ -54,4 +56,16 @@ async def update_master(_: CurrentUser, db: DB):
     ))
     await db.commit()
     await db.refresh(task)
+    await log_action(
+        db,
+        user=user,
+        action="master.update.schedule",
+        target_type="task",
+        target_id=str(task.id),
+        node_id=master_node.id,
+        message="Master update scheduled",
+        details=task.payload,
+    )
+    await db.commit()
+    await publish_event("tasks.changed", {"task_id": str(task.id), "node_id": str(master_node.id), "type": task.type})
     return task

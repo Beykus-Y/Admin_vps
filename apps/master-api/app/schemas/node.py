@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class NodeCreate(BaseModel):
@@ -9,7 +9,7 @@ class NodeCreate(BaseModel):
     provider: str | None = None
     location: str | None = None
     group_name: str | None = None
-    tags: list[str] = []
+    tags: list[str] = Field(default_factory=list)
 
 
 class NodeOut(BaseModel):
@@ -28,8 +28,9 @@ class NodeOut(BaseModel):
     provider: str | None
     location: str | None
     group_name: str | None
-    tags: list
+    tags: list[str]
     agent_version: str | None
+    capabilities: list[str]
     created_at: datetime
     last_seen_at: datetime | None
 

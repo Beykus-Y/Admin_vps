@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import Layout from "@/components/Layout";
 import { flattenContainers, InventoryContainer, loadInventory } from "@/lib/inventory";
 import { formatDateTime, formatNumber, formatPercent, statusLabel } from "@/lib/format";
 import { DataTable, FilterChip, Pill, SearchBar, StatCard, StatusPill } from "@/components/ui";
+import { useLiveReload } from "@/lib/live";
 
 type Filter = "all" | "running" | "stopped";
 
@@ -18,14 +19,14 @@ export default function ContainersPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+  const load = useCallback(() => {
     const token = localStorage.getItem("token");
     if (!token) {
       router.push("/login");
-      return;
+      return Promise.resolve();
     }
 
-    loadInventory()
+    return loadInventory()
       .then((inventory) => setRows(flattenContainers(inventory)))
       .catch((err: unknown) => {
         const message = err instanceof Error ? err.message : "Не удалось загрузить контейнеры";
@@ -34,6 +35,12 @@ export default function ContainersPage() {
       })
       .finally(() => setLoading(false));
   }, [router]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  useLiveReload(!loading, load);
 
   const running = rows.filter((container) => container.state === "running").length;
   const stopped = rows.length - running;

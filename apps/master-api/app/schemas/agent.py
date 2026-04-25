@@ -8,6 +8,7 @@ class EnrollRequest(BaseModel):
     os: str | None = None
     arch: str | None = None
     agent_version: str = "unknown"
+    capabilities: list[str] = Field(default_factory=list)
 
 
 class EnrollResponse(BaseModel):
@@ -19,6 +20,7 @@ class EnrollResponse(BaseModel):
 class HeartbeatRequest(BaseModel):
     agent_version: str = "unknown"
     status: str = "online"
+    capabilities: list[str] = Field(default_factory=list)
 
 
 class SnapshotMetrics(BaseModel):
@@ -80,6 +82,7 @@ class SnapshotRequest(BaseModel):
     containers_collected: bool = True
     ports_collected: bool = True
     errors: list[str] = Field(default_factory=list)
+    capabilities: list[str] = Field(default_factory=list)
 
 
 class TaskOut(BaseModel):

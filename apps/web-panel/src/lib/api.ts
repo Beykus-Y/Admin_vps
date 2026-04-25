@@ -5,6 +5,16 @@ function getToken(): string | null {
   return localStorage.getItem("token");
 }
 
+function buildQuery(params: Record<string, string | number | boolean | undefined | null>): string {
+  const search = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value == null || value === "") return;
+    search.set(key, String(value));
+  });
+  const query = search.toString();
+  return query ? `?${query}` : "";
+}
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const token = getToken();
   const headers: HeadersInit = {
@@ -21,47 +31,20 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   return res.json();
 }
 
-export const api = {
-  login: (username: string, password: string) =>
-    request<{ access_token: string }>("/auth/login", {
-      method: "POST",
-      body: JSON.stringify({ username, password }),
-    }),
+export type UserRole = "viewer" | "operator" | "admin";
 
-  initAdmin: (username: string, password: string) =>
-    request<{ access_token: string }>("/auth/init", {
-      method: "POST",
-      body: JSON.stringify({ username, password }),
-    }),
+export interface AuthUser {
+  id: string;
+  username: string;
+  role: UserRole;
+  is_active: boolean;
+}
 
-  overview: () => request<Overview>("/overview"),
-  version: () => request<VersionInfo>("/version"),
-  master: {
-    update: () => request<Task>("/master/update", { method: "POST" }),
-  },
-
-  nodes: {
-    list: () => request<Node[]>("/nodes"),
-    get: (id: string) => request<Node>(`/nodes/${id}`),
-    create: (data: { name: string; provider?: string; location?: string; group_name?: string }) =>
-      request<Node>("/nodes", { method: "POST", body: JSON.stringify(data) }),
-    delete: (id: string) => request<void>(`/nodes/${id}`, { method: "DELETE" }),
-    createEnrollToken: (id: string) => request<EnrollToken>(`/nodes/${id}/enroll-token`, { method: "POST" }),
-    containers: (id: string) => request<Container[]>(`/nodes/${id}/containers`),
-    ports: (id: string) => request<Port[]>(`/nodes/${id}/ports`),
-    metricsLatest: (id: string) => request<NodeMetric | null>(`/nodes/${id}/metrics/latest`),
-    tasks: (id: string) => request<Task[]>(`/nodes/${id}/tasks`),
-    createTask: (id: string, type: string, payload: Record<string, unknown>) =>
-      request<Task>(`/nodes/${id}/tasks`, { method: "POST", body: JSON.stringify({ type, payload }) }),
-    events: (id: string) => request<NodeEvent[]>(`/nodes/${id}/events`),
-    markPortExpected: (nodeId: string, portId: string, expected: boolean) =>
-      request<void>(`/nodes/${nodeId}/ports/${portId}/expected?expected=${expected}`, { method: "PATCH" }),
-    updateAgent: (id: string) =>
-      request<Task>(`/nodes/${id}/update-agent`, { method: "POST" }),
-    updateOutdatedAgents: () =>
-      request<Task[]>("/nodes/update-agents", { method: "POST" }),
-  },
-};
+export interface TokenResponse {
+  access_token: string;
+  token_type: string;
+  user?: AuthUser | null;
+}
 
 export interface Node {
   id: string;
@@ -81,6 +64,7 @@ export interface Node {
   group_name: string | null;
   tags: string[];
   agent_version: string | null;
+  capabilities: string[];
   created_at: string;
   last_seen_at: string | null;
 }
@@ -161,9 +145,11 @@ export interface EnrollToken {
 export interface NodeEvent {
   id: string;
   node_id: string | null;
+  node_name?: string;
   severity: "info" | "warning" | "critical";
   type: string;
   message: string;
+  extra?: Record<string, unknown>;
   created_at: string;
 }
 
@@ -172,10 +158,187 @@ export interface VersionInfo {
   latest_agent_version: string | null;
 }
 
+export interface AlertRule {
+  id: string;
+  name: string;
+  kind: string;
+  description: string | null;
+  severity: "info" | "warning" | "critical";
+  enabled: boolean;
+  threshold: number | null;
+  duration_seconds: number;
+  filters: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AlertIncident {
+  id: string;
+  rule_id: string;
+  rule_name: string;
+  rule_kind: string;
+  node_id: string | null;
+  node_name: string | null;
+  severity: "info" | "warning" | "critical";
+  status: string;
+  message: string;
+  current_value: number | null;
+  extra: Record<string, unknown>;
+  started_at: string;
+  last_seen_at: string;
+  acknowledged_at: string | null;
+  acknowledged_by: string | null;
+  silenced_until: string | null;
+  resolved_at: string | null;
+}
+
+export interface AlertChannel {
+  id: string;
+  name: string;
+  type: "webhook" | "telegram" | "email";
+  enabled: boolean;
+  severities: string[];
+  send_resolved: boolean;
+  config: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AuditLog {
+  id: string;
+  actor_username: string | null;
+  node_id: string | null;
+  node_name: string | null;
+  action: string;
+  target_type: string | null;
+  target_id: string | null;
+  message: string | null;
+  details: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface InventoryNode {
+  node: Node;
+  metrics: NodeMetric | null;
+  containers: Container[];
+  ports: Port[];
+  incidents: AlertIncidentSummary[];
+  tasks_pending: number;
+}
+
+export interface AlertIncidentSummary {
+  id: string;
+  rule_id: string;
+  rule_name: string;
+  rule_kind: string;
+  severity: "info" | "warning" | "critical";
+  status: string;
+  message: string;
+  current_value: number | null;
+  started_at: string;
+  last_seen_at: string;
+  node_name: string | null;
+}
+
+export interface InventorySnapshot {
+  nodes: InventoryNode[];
+  recent_events: NodeEvent[];
+  summary: {
+    nodes: { total: number; online: number; offline: number; pending: number };
+    containers: { total: number; running: number };
+    ports: { total: number; unexpected: number; public: number };
+    incidents: { open: number; critical: number };
+  };
+}
+
+export const api = {
+  login: (username: string, password: string) =>
+    request<TokenResponse>("/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ username, password }),
+    }),
+
+  initAdmin: (username: string, password: string) =>
+    request<TokenResponse>("/auth/init", {
+      method: "POST",
+      body: JSON.stringify({ username, password }),
+    }),
+
+  auth: {
+    me: () => request<AuthUser>("/auth/me"),
+  },
+
+  overview: () => request<Overview>("/overview"),
+  version: () => request<VersionInfo>("/version"),
+  inventory: {
+    get: () => request<InventorySnapshot>("/inventory"),
+  },
+  events: {
+    list: (params: { severity?: string; node_id?: string; limit?: number } = {}) =>
+      request<NodeEvent[]>(`/events${buildQuery(params)}`),
+  },
+  alerts: {
+    rules: () => request<AlertRule[]>("/alerts/rules"),
+    updateRule: (id: string, payload: Partial<Pick<AlertRule, "name" | "description" | "severity" | "enabled" | "threshold" | "duration_seconds" | "filters">>) =>
+      request<AlertRule>(`/alerts/rules/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
+    incidents: (params: { status?: string; node_id?: string; limit?: number } = {}) =>
+      request<AlertIncident[]>(`/alerts/incidents${buildQuery(params)}`),
+    acknowledgeIncident: (id: string) =>
+      request<AlertIncident>(`/alerts/incidents/${id}/ack`, { method: "POST" }),
+    silenceIncident: (id: string, minutes: number) =>
+      request<AlertIncident>(`/alerts/incidents/${id}/silence`, { method: "POST", body: JSON.stringify({ minutes }) }),
+    channels: () => request<AlertChannel[]>("/alerts/channels"),
+    createChannel: (payload: Omit<AlertChannel, "id" | "created_at" | "updated_at">) =>
+      request<AlertChannel>("/alerts/channels", { method: "POST", body: JSON.stringify(payload) }),
+    updateChannel: (id: string, payload: Partial<Omit<AlertChannel, "id" | "created_at" | "updated_at">>) =>
+      request<AlertChannel>(`/alerts/channels/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
+    deleteChannel: (id: string) =>
+      request<void>(`/alerts/channels/${id}`, { method: "DELETE" }),
+    testChannel: (id: string) =>
+      request<{ results: Array<{ channel_id: string; status: string; error?: string }> }>(`/alerts/channels/${id}/test`, { method: "POST" }),
+  },
+  audit: {
+    list: (params: { action?: string; target_type?: string; limit?: number } = {}) =>
+      request<AuditLog[]>(`/audit${buildQuery(params)}`),
+  },
+  master: {
+    update: () => request<Task>("/master/update", { method: "POST" }),
+  },
+
+  nodes: {
+    list: () => request<Node[]>("/nodes"),
+    get: (id: string) => request<Node>(`/nodes/${id}`),
+    create: (data: { name: string; provider?: string; location?: string; group_name?: string; tags?: string[] }) =>
+      request<Node>("/nodes", { method: "POST", body: JSON.stringify(data) }),
+    delete: (id: string) => request<void>(`/nodes/${id}`, { method: "DELETE" }),
+    createEnrollToken: (id: string) => request<EnrollToken>(`/nodes/${id}/enroll-token`, { method: "POST" }),
+    containers: (id: string) => request<Container[]>(`/nodes/${id}/containers`),
+    ports: (id: string) => request<Port[]>(`/nodes/${id}/ports`),
+    metricsLatest: (id: string) => request<NodeMetric | null>(`/nodes/${id}/metrics/latest`),
+    metricsHistory: (id: string, range = "24h", points = 48) =>
+      request<NodeMetric[]>(`/nodes/${id}/metrics/history${buildQuery({ range, points })}`),
+    tasks: (id: string) => request<Task[]>(`/nodes/${id}/tasks`),
+    createTask: (id: string, type: string, payload: Record<string, unknown>) =>
+      request<Task>(`/nodes/${id}/tasks`, { method: "POST", body: JSON.stringify({ type, payload }) }),
+    events: (id: string) => request<NodeEvent[]>(`/nodes/${id}/events`),
+    markPortExpected: (nodeId: string, portId: string, expected: boolean) =>
+      request<void>(`/nodes/${nodeId}/ports/${portId}/expected?expected=${expected}`, { method: "PATCH" }),
+    updateAgent: (id: string) =>
+      request<Task>(`/nodes/${id}/update-agent`, { method: "POST" }),
+    updateOutdatedAgents: () =>
+      request<Task[]>("/nodes/update-agents", { method: "POST" }),
+  },
+  streamUrl: () => {
+    const token = getToken();
+    if (!token) return null;
+    return `${BASE_URL}/api/stream?token=${encodeURIComponent(token)}`;
+  },
+};
+
 /** Returns true if latestVersion is strictly newer than currentVersion (semver-ish). */
 export function isAgentOutdated(current: string | null, latest: string | null): boolean {
   if (!current || !latest) return false;
-  const strip = (v: string) => v.replace(/^[^\d]*/, ""); // strip "v" prefix
+  const strip = (v: string) => v.replace(/^[^\d]*/, "");
   const toNums = (v: string) => strip(v).split(".").map(Number);
   const [ca, cb, cc = 0] = toNums(current);
   const [la, lb, lc = 0] = toNums(latest);

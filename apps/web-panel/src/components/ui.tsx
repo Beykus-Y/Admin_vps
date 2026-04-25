@@ -106,6 +106,34 @@ export function SparkBars({ values, color = "#4ade80", className }: { values: nu
   );
 }
 
+export function LineChart({ values, color = "#4ade80", className }: { values: Array<number | null | undefined>; color?: string; className?: string }) {
+  const points = values.map((value, index) => ({ x: index, y: value ?? null })).filter((point) => point.y != null) as Array<{ x: number; y: number }>;
+  if (points.length === 0) {
+    return <div className={clsx("flex h-24 items-center justify-center rounded-lg bg-[#0c0e16] font-mono text-xs text-[#2a3355]", className)}>нет истории</div>;
+  }
+
+  const max = Math.max(...points.map((point) => point.y), 1);
+  const min = Math.min(...points.map((point) => point.y), 0);
+  const range = Math.max(max - min, 1);
+  const width = 100;
+  const height = 48;
+  const polyline = points
+    .map((point) => {
+      const x = points.length === 1 ? 0 : (point.x / (values.length - 1 || 1)) * width;
+      const y = height - ((point.y - min) / range) * height;
+      return `${x},${y}`;
+    })
+    .join(" ");
+
+  return (
+    <div className={clsx("rounded-lg bg-[#0c0e16] p-2", className)}>
+      <svg viewBox={`0 0 ${width} ${height}`} className="h-20 w-full overflow-visible">
+        <polyline fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" points={polyline} />
+      </svg>
+    </div>
+  );
+}
+
 export function StatCard({ label, value, sub, color = "#4ade80" }: { label: string; value: ReactNode; sub?: ReactNode; color?: string }) {
   return (
     <Card className="relative overflow-hidden p-4">

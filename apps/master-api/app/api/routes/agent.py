@@ -16,7 +16,15 @@ from app.schemas.agent import (
     TaskOut,
     TaskResultRequest,
 )
+from app.services.alerts import (
+    evaluate_node_inventory_alerts,
+    evaluate_offline_alert,
+    list_notification_channels,
+    notification_payload,
+)
 from app.services.events import is_noisy_dynamic_udp_port
+from app.services.notifications import dispatch_channels
+from app.services.realtime import publish_event
 
 router = APIRouter(prefix="/agent", tags=["agent"])
 
@@ -48,6 +56,7 @@ async def enroll(body: EnrollRequest, db: DB):
     node.os = body.os
     node.arch = body.arch
     node.agent_version = body.agent_version
+    node.capabilities = body.capabilities or []
     node.status = "online"
     node.last_seen_at = now
 
@@ -55,6 +64,7 @@ async def enroll(body: EnrollRequest, db: DB):
     cred = NodeCredential(node_id=node.id, token_hash=hash_token(raw_token))
     db.add(cred)
     await db.commit()
+    await publish_event("inventory.changed", {"node_id": str(node.id), "status": node.status, "action": "enrolled"})
 
     return EnrollResponse(
         node_id=str(node.id),
@@ -75,6 +85,8 @@ async def heartbeat(body: HeartbeatRequest, node: AgentNode, db: DB):
     node.status = "online"
     if body.agent_version:
         node.agent_version = body.agent_version
+    if body.capabilities:
+        node.capabilities = body.capabilities
 
     if was_offline:
         db.add(Event(
@@ -84,7 +96,24 @@ async def heartbeat(body: HeartbeatRequest, node: AgentNode, db: DB):
             message=f"Node {node.name} is back online",
         ))
 
+    notifications = await evaluate_offline_alert(db, node=node, active=False)
     await db.commit()
+    if notifications:
+        for envelope in notifications:
+            channels = await list_notification_channels(db, envelope.severity, status=envelope.status)
+            channel_payloads = [
+                {
+                    "id": channel.id,
+                    "name": channel.name,
+                    "type": channel.type,
+                    "config": channel.config or {},
+                    "send_resolved": channel.send_resolved,
+                }
+                for channel in channels
+            ]
+            if channel_payloads:
+                await dispatch_channels(channel_payloads, notification_payload(envelope))
+    await publish_event("inventory.changed", {"node_id": str(node.id), "status": node.status})
 
 
 @router.post("/snapshot", status_code=204)
@@ -92,6 +121,8 @@ async def snapshot(body: SnapshotRequest, node: AgentNode, db: DB):
     now = datetime.now(UTC)
     node.last_seen_at = now
     node.status = "online"
+    if body.capabilities:
+        node.capabilities = body.capabilities
 
     if body.system:
         system = body.system
@@ -225,7 +256,32 @@ async def snapshot(body: SnapshotRequest, node: AgentNode, db: DB):
                 extra={},
             ))
 
+    await db.flush()
+    notifications = await evaluate_node_inventory_alerts(
+        db,
+        node=node,
+        metrics=body.metrics,
+        containers=body.containers,
+        containers_collected=body.containers_collected,
+        ports_collected=body.ports_collected,
+    )
+
     await db.commit()
+    for envelope in notifications:
+        channels = await list_notification_channels(db, envelope.severity, status=envelope.status)
+        channel_payloads = [
+            {
+                "id": channel.id,
+                "name": channel.name,
+                "type": channel.type,
+                "config": channel.config or {},
+                "send_resolved": channel.send_resolved,
+            }
+            for channel in channels
+        ]
+        if channel_payloads:
+            await dispatch_channels(channel_payloads, notification_payload(envelope))
+    await publish_event("inventory.changed", {"node_id": str(node.id), "status": node.status})
 
 
 @router.get("/tasks", response_model=list[TaskOut])
@@ -264,4 +320,12 @@ async def submit_task_result(task_id: str, body: TaskResultRequest, node: AgentN
     task.result = body.result
     task.error = body.error
     task.finished_at = datetime.now(UTC)
+    db.add(Event(
+        node_id=node.id,
+        severity="info" if body.status == "success" else "warning",
+        type=f"task.{body.status}",
+        message=f"Task {task.type} {body.status} on {node.name}",
+        extra={"task_id": str(task.id), "type": task.type, "result": body.result, "error": body.error},
+    ))
     await db.commit()
+    await publish_event("tasks.changed", {"task_id": str(task.id), "node_id": str(node.id), "status": body.status, "type": task.type})

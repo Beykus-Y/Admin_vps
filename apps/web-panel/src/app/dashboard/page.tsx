@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AlertTriangle, CheckCircle, Clock3, RadioTower, Server } from "lucide-react";
@@ -9,6 +9,7 @@ import { api, Overview } from "@/lib/api";
 import { flattenContainers, flattenEvents, flattenPorts, InventoryNode, isMasterNode, loadInventory, primaryNodeIP } from "@/lib/inventory";
 import { formatBytes, formatDateTime, formatNumber, formatPercent, formatRelativeTime, statusLabel } from "@/lib/format";
 import { Card, MetricBar, Pill, SectionTitle, SeverityBadge, SparkBars, StatCard, StatusDot } from "@/components/ui";
+import { useLiveReload } from "@/lib/live";
 
 function average(values: number[]): number | null {
   if (values.length === 0) return null;
@@ -113,17 +114,18 @@ export default function DashboardPage() {
   const [inventory, setInventory] = useState<InventoryNode[]>([]);
   const [error, setError] = useState("");
 
-  useEffect(() => {
+  const load = useCallback(() => {
     const token = localStorage.getItem("token");
     if (!token) {
       router.push("/login");
-      return;
+      return Promise.resolve();
     }
 
-    Promise.all([api.overview(), loadInventory()])
+    return Promise.all([api.overview(), loadInventory()])
       .then(([overviewData, inventoryData]) => {
         setOverview(overviewData);
         setInventory(inventoryData);
+        setError("");
       })
       .catch((err: unknown) => {
         const message = err instanceof Error ? err.message : "Не удалось загрузить обзор";
@@ -131,6 +133,12 @@ export default function DashboardPage() {
         else setError(message);
       });
   }, [router]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  useLiveReload(Boolean(overview), load);
 
   if (error) return <Layout><div className="p-6 text-[#f87171]">{error}</div></Layout>;
   if (!overview) return <Layout><div className="p-6 font-mono text-sm text-[#4a5170]">Загружаю обзор инфраструктуры...</div></Layout>;

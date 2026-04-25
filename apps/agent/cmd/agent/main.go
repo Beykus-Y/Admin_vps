@@ -20,7 +20,7 @@ import (
 	"github.com/filincontrol/agent/internal/executor"
 )
 
-var version = "0.1.0"
+var version = "dev"
 
 var publicIPCache = struct {
 	sync.Mutex
@@ -56,12 +56,13 @@ func main() {
 	taskTick := time.NewTicker(time.Duration(cfg.TaskPollIntervalSeconds) * time.Second)
 	heartbeatTick := time.NewTicker(8 * time.Second)
 	taskProcessing := make(chan struct{}, 1)
+	capabilities := executor.Capabilities()
 
 	for {
 		select {
 		case <-heartbeatTick.C:
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			if err := c.Heartbeat(ctx, version); err != nil {
+			if err := c.Heartbeat(ctx, version, capabilities); err != nil {
 				log.Printf("heartbeat error: %v", err)
 			}
 			cancel()
@@ -138,6 +139,7 @@ func sendSnapshot(ctx context.Context, c *client.Client) {
 		ContainersCollected: containersCollected,
 		PortsCollected:      portsCollected,
 		Errors:              inventoryErrors,
+		Capabilities:        executor.Capabilities(),
 	}
 	if err := c.Snapshot(ctx, snap); err != nil {
 		log.Printf("snapshot error: %v", err)
@@ -218,6 +220,7 @@ func runEnroll(masterURL, enrollToken, configPath string) {
 		OS:           detectOS(),
 		Arch:         runtime.GOARCH,
 		AgentVersion: version,
+		Capabilities: executor.Capabilities(),
 	})
 	if err != nil {
 		log.Fatalf("enroll failed: %v", err)

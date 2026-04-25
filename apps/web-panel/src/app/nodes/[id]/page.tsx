@@ -1,13 +1,15 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { AlertTriangle, ArrowUpCircle, Loader2, Play, RefreshCw, Square, Trash2 } from "lucide-react";
+import { AlertTriangle, ArrowUpCircle, Loader2, Play, Power, RefreshCw, Square, Trash2 } from "lucide-react";
 import Layout from "@/components/Layout";
 import { api, Container, isAgentOutdated, Node, NodeEvent, NodeMetric, Port, Task, VersionInfo } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 import { formatBytes, formatDateTime, formatFullDateTime, formatPercent, formatRelativeTime, formatUptime, statusLabel, taskTypeLabel } from "@/lib/format";
 import { isMasterNode } from "@/lib/inventory";
-import { Card, DataTable, MetricBar, Pill, SectionTitle, SeverityBadge, SoftButton, StatusDot, StatusPill } from "@/components/ui";
+import { useLiveReload } from "@/lib/live";
+import { Card, DataTable, LineChart, MetricBar, Pill, SectionTitle, SeverityBadge, SoftButton, StatusDot, StatusPill } from "@/components/ui";
 
 type Tab = "overview" | "docker" | "ports" | "tasks" | "events";
 
@@ -49,15 +51,28 @@ function taskStatusColor(status: string): "green" | "red" | "blue" | "yellow" | 
   return "gray";
 }
 
+function taskResultText(result: Record<string, unknown> | null): string {
+  if (!result) return "-";
+  const candidates = [result["message"], result["stdout"], result["output"]];
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.trim()) {
+      return candidate.slice(0, 80);
+    }
+  }
+  return "ok";
+}
+
 export default function NodeDetailPage() {
   const router = useRouter();
   const params = useParams();
   const id = params.id as string;
+  const { user } = useAuth();
 
   const [node, setNode] = useState<Node | null>(null);
   const [containers, setContainers] = useState<Container[]>([]);
   const [ports, setPorts] = useState<Port[]>([]);
   const [metrics, setMetrics] = useState<NodeMetric | null>(null);
+  const [history, setHistory] = useState<NodeMetric[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [events, setEvents] = useState<NodeEvent[]>([]);
   const [tab, setTab] = useState<Tab>("overview");
@@ -66,7 +81,7 @@ export default function NodeDetailPage() {
   const [updateLoading, setUpdateLoading] = useState(false);
   const [updateMsg, setUpdateMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
-  async function load() {
+  const load = useCallback(async () => {
     const token = localStorage.getItem("token");
     if (!token) {
       router.push("/login");
@@ -74,11 +89,12 @@ export default function NodeDetailPage() {
     }
 
     try {
-      const [nodeData, containerData, portData, metricData, taskData, eventData, versionData] = await Promise.all([
+      const [nodeData, containerData, portData, metricData, historyData, taskData, eventData, versionData] = await Promise.all([
         api.nodes.get(id),
         api.nodes.containers(id),
         api.nodes.ports(id),
         api.nodes.metricsLatest(id),
+        api.nodes.metricsHistory(id, "24h", 48).catch(() => [] as NodeMetric[]),
         api.nodes.tasks(id),
         api.nodes.events(id),
         api.version().catch(() => null as VersionInfo | null),
@@ -87,15 +103,17 @@ export default function NodeDetailPage() {
       setContainers(containerData);
       setPorts(portData);
       setMetrics(metricData);
+      setHistory(historyData);
       setTasks(taskData);
       setEvents(eventData);
       if (versionData) setVersionInfo(versionData);
     } catch {
       router.push("/login");
     }
-  }
+  }, [id, router]);
 
-  useEffect(() => { load(); }, [id]);
+  useEffect(() => { void load(); }, [load]);
+  useLiveReload(Boolean(node), load);
 
   async function handleUpdateAgent() {
     setUpdateLoading(true);
@@ -138,6 +156,18 @@ export default function NodeDetailPage() {
   const outdated = isAgentOutdated(node.agent_version, versionInfo?.latest_agent_version ?? null);
   const ramPct = percent(metrics?.ram_used_mb, metrics?.ram_total_mb);
   const diskPct = percent(metrics?.disk_used_gb, metrics?.disk_total_gb);
+  const canOperate = Boolean(user && user.role !== "viewer");
+  const canDelete = user?.role === "admin";
+  const capabilities = node.capabilities || [];
+  const supports = useCallback((type: string) => capabilities.length === 0 || capabilities.includes(type), [capabilities]);
+  const ramHistory = useMemo(
+    () => history.map((point) => (point.ram_used_mb != null && point.ram_total_mb ? (point.ram_used_mb / point.ram_total_mb) * 100 : null)),
+    [history]
+  );
+  const diskHistory = useMemo(
+    () => history.map((point) => (point.disk_used_gb != null && point.disk_total_gb ? (point.disk_used_gb / point.disk_total_gb) * 100 : null)),
+    [history]
+  );
 
   return (
     <Layout>
@@ -164,14 +194,20 @@ export default function NodeDetailPage() {
               </div>
             </div>
             <div className="flex flex-wrap gap-2">
-              {node.status === "online" && (
+              {canOperate && node.status === "online" && (
                 <SoftButton onClick={handleUpdateAgent} disabled={updateLoading} variant={outdated ? "yellow" : "blue"}>
                   {updateLoading ? <Loader2 size={14} className="animate-spin" /> : <ArrowUpCircle size={14} />}
                   Обновить агент
                 </SoftButton>
               )}
-              <SoftButton onClick={load} variant="ghost"><RefreshCw size={14} /> Обновить</SoftButton>
-              <SoftButton onClick={deleteNode} variant="danger"><Trash2 size={14} /> Удалить</SoftButton>
+              {canOperate && node.status === "online" && supports("system.reboot") && (
+                <SoftButton onClick={() => sendTask("system.reboot", { delay_minutes: 1 })} disabled={taskLoading !== null} variant="yellow">
+                  <Power size={14} />
+                  Перезагрузить
+                </SoftButton>
+              )}
+              <SoftButton onClick={() => void load()} variant="ghost"><RefreshCw size={14} /> Обновить</SoftButton>
+              {canDelete && <SoftButton onClick={deleteNode} variant="danger"><Trash2 size={14} /> Удалить</SoftButton>}
             </div>
           </div>
           {updateMsg && (
@@ -209,6 +245,7 @@ export default function NodeDetailPage() {
                 <InfoRow label="Локальные IP" value={formatLocalIPs(node.local_ips)} />
                 <InfoRow label="Провайдер" value={node.provider} />
                 <InfoRow label="Локация" value={node.location} />
+                <InfoRow label="Возможности" value={node.capabilities.length ? node.capabilities.join(", ") : "наследуемая совместимость"} />
               </div>
             </Card>
 
@@ -219,6 +256,20 @@ export default function NodeDetailPage() {
                   <MetricBar label="CPU" value={metrics.cpu_percent} />
                   <MetricBar label="RAM" value={ramPct} />
                   <MetricBar label="Disk" value={diskPct} />
+                  <div className="grid gap-3 md:grid-cols-3">
+                    <div>
+                      <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.14em] text-[#2a3355]">CPU 24ч</div>
+                      <LineChart values={history.map((point) => point.cpu_percent)} color="#38bdf8" />
+                    </div>
+                    <div>
+                      <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.14em] text-[#2a3355]">RAM 24ч</div>
+                      <LineChart values={ramHistory} color="#fbbf24" />
+                    </div>
+                    <div>
+                      <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.14em] text-[#2a3355]">Disk 24ч</div>
+                      <LineChart values={diskHistory} color="#a78bfa" />
+                    </div>
+                  </div>
                   <div className="grid grid-cols-2 gap-3 pt-2 font-mono text-xs text-[#4a5170]">
                     <div className="rounded-lg bg-[#0c0e16] p-3">Нагрузка: <span className="text-[#dde2f0]">{[metrics.load_1, metrics.load_5, metrics.load_15].filter((value) => value != null).map((value) => value!.toFixed(2)).join(" / ") || "-"}</span></div>
                     <div className="rounded-lg bg-[#0c0e16] p-3">Обновлено: <span className="text-[#dde2f0]">{formatRelativeTime(metrics.created_at)}</span></div>
@@ -256,9 +307,9 @@ export default function NodeDetailPage() {
               { key: "status", label: "Статус", render: (row) => <StatusPill status={row.state || row.status} /> },
               { key: "actions", label: "Действия", render: (row) => (
                 <div className="flex gap-1">
-                  <button onClick={() => sendTask("container.restart", { container_id: row.container_id })} disabled={taskLoading !== null} className="rounded bg-[#1d2135] p-1.5 text-[#4a5170] transition hover:text-[#38bdf8] disabled:opacity-50" title="Перезапустить"><RefreshCw size={13} /></button>
-                  <button onClick={() => sendTask("container.stop", { container_id: row.container_id })} disabled={taskLoading !== null} className="rounded bg-[#1d2135] p-1.5 text-[#4a5170] transition hover:text-[#f87171] disabled:opacity-50" title="Остановить"><Square size={13} /></button>
-                  <button onClick={() => sendTask("container.start", { container_id: row.container_id })} disabled={taskLoading !== null} className="rounded bg-[#1d2135] p-1.5 text-[#4a5170] transition hover:text-[#4ade80] disabled:opacity-50" title="Запустить"><Play size={13} /></button>
+                  <button onClick={() => sendTask("container.restart", { container_id: row.container_id })} disabled={!canOperate || taskLoading !== null || !supports("container.restart")} className="rounded bg-[#1d2135] p-1.5 text-[#4a5170] transition hover:text-[#38bdf8] disabled:opacity-40" title="Перезапустить"><RefreshCw size={13} /></button>
+                  <button onClick={() => sendTask("container.stop", { container_id: row.container_id })} disabled={!canOperate || taskLoading !== null || !supports("container.stop")} className="rounded bg-[#1d2135] p-1.5 text-[#4a5170] transition hover:text-[#f87171] disabled:opacity-40" title="Остановить"><Square size={13} /></button>
+                  <button onClick={() => sendTask("container.start", { container_id: row.container_id })} disabled={!canOperate || taskLoading !== null || !supports("container.start")} className="rounded bg-[#1d2135] p-1.5 text-[#4a5170] transition hover:text-[#4ade80] disabled:opacity-40" title="Запустить"><Play size={13} /></button>
                 </div>
               ) },
             ]}
@@ -276,7 +327,7 @@ export default function NodeDetailPage() {
               { key: "pid", label: "PID/пользователь", render: (row) => row.pid ? `${row.pid}${row.user_name ? `/${row.user_name}` : ""}` : "-" },
               { key: "container", label: "Контейнер", render: (row) => row.container_name || <span className="text-[#2a3355]">нет</span> },
               { key: "state", label: "Статус", render: (row) => <StatusPill status={row.status} /> },
-              { key: "expected", label: "Ожидаемый", render: (row) => row.is_expected ? <Pill color="green">да</Pill> : <button onClick={() => api.nodes.markPortExpected(id, row.id, true).then(load)} className="text-[#fbbf24] underline-offset-4 hover:underline">считать ожидаемым</button> },
+              { key: "expected", label: "Ожидаемый", render: (row) => row.is_expected ? <Pill color="green">да</Pill> : canOperate ? <button onClick={() => api.nodes.markPortExpected(id, row.id, true).then(() => load())} className="text-[#fbbf24] underline-offset-4 hover:underline">считать ожидаемым</button> : <span className="text-[#2a3355]">нет</span> },
               { key: "seen", label: "Когда", render: (row) => formatDateTime(row.last_seen_at) },
             ]}
           />
@@ -289,6 +340,7 @@ export default function NodeDetailPage() {
             columns={[
               { key: "status", label: "Статус", render: (row) => <Pill color={taskStatusColor(row.status)}>{statusLabel(row.status)}</Pill> },
               { key: "type", label: "Тип", render: (row) => <span className="text-[#dde2f0]">{taskTypeLabel(row.type)}</span> },
+              { key: "result", label: "Результат", render: (row) => row.result ? <span className="text-[#4ade80]">{taskResultText(row.result)}</span> : <span className="text-[#2a3355]">-</span> },
               { key: "error", label: "Ошибка", render: (row) => row.error || <span className="text-[#2a3355]">нет</span> },
               { key: "created", label: "Создана", render: (row) => <span title={formatFullDateTime(row.created_at)}>{formatDateTime(row.created_at)}</span> },
             ]}

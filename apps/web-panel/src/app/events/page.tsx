@@ -1,40 +1,35 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import Layout from "@/components/Layout";
 import { api } from "@/lib/api";
-import { flattenEvents, InventoryEvent, loadInventory } from "@/lib/inventory";
 import { formatDateTime, formatNumber, formatRelativeTime } from "@/lib/format";
 import { DataTable, FilterChip, SearchBar, SeverityBadge, StatCard } from "@/components/ui";
+import { useLiveReload } from "@/lib/live";
 
 type Filter = "all" | "critical" | "warning" | "info";
 
 export default function EventsPage() {
   const router = useRouter();
-  const [rows, setRows] = useState<InventoryEvent[]>([]);
+  const [rows, setRows] = useState<Array<{ id: string; node_id: string | null; node_name: string; severity: "info" | "warning" | "critical"; type: string; message: string; created_at: string }>>([]);
   const [filter, setFilter] = useState<Filter>("all");
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  useEffect(() => {
+  const load = useCallback(() => {
     const token = localStorage.getItem("token");
     if (!token) {
       router.push("/login");
-      return;
+      return Promise.resolve();
     }
 
-    Promise.all([loadInventory(), api.overview()])
-      .then(([inventory, overview]) => {
-        const nodeEvents = flattenEvents(inventory);
-        if (nodeEvents.length) {
-          setRows(nodeEvents);
-          return;
-        }
-
-        setRows(overview.recent_events.map((event) => ({ ...event, node_name: "системное событие" })));
+    return api.events.list({ limit: 300 })
+      .then((data) => {
+        setRows(data.map((event) => ({ ...event, node_name: event.node_name || "системное событие" })));
+        setError("");
       })
       .catch((err: unknown) => {
         const message = err instanceof Error ? err.message : "Не удалось загрузить события";
@@ -43,6 +38,12 @@ export default function EventsPage() {
       })
       .finally(() => setLoading(false));
   }, [router]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  useLiveReload(!loading, load);
 
   const critical = rows.filter((event) => event.severity === "critical").length;
   const warning = rows.filter((event) => event.severity === "warning").length;

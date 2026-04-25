@@ -8,6 +8,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       JWT_SECRET: ${JWT_SECRET}
       AGENT_AUTO_UPDATE_ENABLED: ${AGENT_AUTO_UPDATE_ENABLED:-false}
+      CORS_ORIGINS: ${CORS_ORIGINS:-["*"]}
       DEBUG: "false"
     depends_on:
       postgres:

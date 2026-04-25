@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import Layout from "@/components/Layout";
@@ -8,6 +8,7 @@ import { api } from "@/lib/api";
 import { flattenPorts, InventoryPort, loadInventory } from "@/lib/inventory";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { DataTable, FilterChip, Pill, SearchBar, StatCard, StatusPill } from "@/components/ui";
+import { useLiveReload } from "@/lib/live";
 
 type Filter = "all" | "unexpected" | "public" | "stale";
 
@@ -24,10 +25,10 @@ export default function PortsPage() {
   const [error, setError] = useState("");
   const [updating, setUpdating] = useState<string | null>(null);
 
-  async function load() {
+  const load = useCallback(async () => {
     const inventory = await loadInventory();
     setRows(flattenPorts(inventory));
-  }
+  }, []);
 
   useEffect(() => {
     const token = localStorage.getItem("token");
@@ -43,7 +44,9 @@ export default function PortsPage() {
         else setError(message);
       })
       .finally(() => setLoading(false));
-  }, [router]);
+  }, [load, router]);
+
+  useLiveReload(!loading, load);
 
   async function markExpected(port: InventoryPort) {
     setUpdating(port.id);

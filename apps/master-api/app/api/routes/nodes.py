@@ -3,21 +3,40 @@ import shlex
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel
 from sqlalchemy import select
 
-from app.api.deps import DB, CurrentUser
+from app.api.deps import CurrentAdmin, CurrentOperator, CurrentUser, DB
 from app.core.config import settings
 from app.core.security import generate_enroll_token, hash_token
 from app.db.models import DockerContainer, Event, Node, NodeEnrollToken, NodeMetric, OpenPort, Task
 from app.schemas.node import NodeCreate, NodeEnrollTokenOut, NodeMetricOut, NodeOut
 from app.schemas.task import ALLOWED_TASK_TYPES, TaskCreate, TaskOutFull
 from app.services.agent_releases import build_agent_update_payload, is_agent_outdated
+from app.services.audit import log_action
 from app.services.events import is_noisy_port_event
+from app.services.realtime import publish_event
 
 router = APIRouter(prefix="/nodes", tags=["nodes"])
 
 GITHUB_REPO = "Beykus-Y/Admin_vps"
 AGENT_INSTALLER_URL = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/scripts/install-agent.sh"
+
+
+class NodeMetricHistoryPoint(BaseModel):
+    created_at: datetime
+    cpu_percent: float | None = None
+    ram_used_mb: int | None = None
+    ram_total_mb: int | None = None
+    disk_used_gb: float | None = None
+    disk_total_gb: float | None = None
+    load_1: float | None = None
+    load_5: float | None = None
+    load_15: float | None = None
+    network_rx_bytes: int | None = None
+    network_tx_bytes: int | None = None
+
+    model_config = {"from_attributes": True}
 
 
 def external_base_url(request: Request) -> str:
@@ -31,7 +50,7 @@ def external_base_url(request: Request) -> str:
 
 
 @router.post("", response_model=NodeOut, status_code=201)
-async def create_node(body: NodeCreate, _: CurrentUser, db: DB):
+async def create_node(body: NodeCreate, user: CurrentOperator, db: DB):
     node = Node(
         name=body.name,
         provider=body.provider,
@@ -43,6 +62,18 @@ async def create_node(body: NodeCreate, _: CurrentUser, db: DB):
     db.add(node)
     await db.commit()
     await db.refresh(node)
+    await log_action(
+        db,
+        user=user,
+        action="nodes.create",
+        target_type="node",
+        target_id=str(node.id),
+        node_id=node.id,
+        message=f"Node {node.name} created",
+        details={"provider": node.provider, "location": node.location, "group_name": node.group_name, "tags": node.tags},
+    )
+    await db.commit()
+    await publish_event("inventory.changed", {"node_id": str(node.id), "action": "created"})
     return node
 
 
@@ -62,17 +93,28 @@ async def get_node(node_id: uuid.UUID, _: CurrentUser, db: DB):
 
 
 @router.delete("/{node_id}", status_code=204)
-async def delete_node(node_id: uuid.UUID, _: CurrentUser, db: DB):
+async def delete_node(node_id: uuid.UUID, user: CurrentAdmin, db: DB):
     result = await db.execute(select(Node).where(Node.id == node_id))
     node = result.scalar_one_or_none()
     if not node:
         raise HTTPException(status_code=404, detail="Node not found")
+    await log_action(
+        db,
+        user=user,
+        action="nodes.delete",
+        target_type="node",
+        target_id=str(node.id),
+        node_id=node.id,
+        message=f"Node {node.name} deleted",
+        details={"name": node.name},
+    )
     await db.delete(node)
     await db.commit()
+    await publish_event("inventory.changed", {"node_id": str(node_id), "action": "deleted"})
 
 
 @router.post("/{node_id}/enroll-token", response_model=NodeEnrollTokenOut)
-async def create_enroll_token(node_id: uuid.UUID, request: Request, _: CurrentUser, db: DB):
+async def create_enroll_token(node_id: uuid.UUID, request: Request, user: CurrentOperator, db: DB):
     result = await db.execute(select(Node).where(Node.id == node_id))
     node = result.scalar_one_or_none()
     if not node:
@@ -90,6 +132,17 @@ async def create_enroll_token(node_id: uuid.UUID, request: Request, _: CurrentUs
         f"--master-url {shlex.quote(master_url)} "
         f"--enroll-token {shlex.quote(raw_token)}"
     )
+    await log_action(
+        db,
+        user=user,
+        action="nodes.enroll_token.create",
+        target_type="node",
+        target_id=str(node.id),
+        node_id=node.id,
+        message=f"Enroll token created for {node.name}",
+        details={"expires_at": expires_at.isoformat()},
+    )
+    await db.commit()
     return NodeEnrollTokenOut(install_command=install_cmd, enroll_token=raw_token, expires_at=expires_at)
 
 
@@ -148,13 +201,24 @@ async def get_ports(node_id: uuid.UUID, _: CurrentUser, db: DB):
 
 
 @router.patch("/{node_id}/ports/{port_id}/expected", status_code=204)
-async def mark_port_expected(node_id: uuid.UUID, port_id: uuid.UUID, expected: bool, _: CurrentUser, db: DB):
+async def mark_port_expected(node_id: uuid.UUID, port_id: uuid.UUID, expected: bool, user: CurrentOperator, db: DB):
     result = await db.execute(select(OpenPort).where(OpenPort.id == port_id, OpenPort.node_id == node_id))
     port = result.scalar_one_or_none()
     if not port:
         raise HTTPException(status_code=404, detail="Port not found")
     port.is_expected = expected
+    await log_action(
+        db,
+        user=user,
+        action="ports.expected.update",
+        target_type="port",
+        target_id=str(port.id),
+        node_id=node_id,
+        message=f"Port {port.protocol}/{port.port} expected={expected}",
+        details={"expected": expected},
+    )
     await db.commit()
+    await publish_event("inventory.changed", {"node_id": str(node_id), "port_id": str(port.id), "action": "port_expected"})
 
 
 @router.get("/{node_id}/metrics/latest", response_model=NodeMetricOut | None)
@@ -168,6 +232,36 @@ async def get_latest_metrics(node_id: uuid.UUID, _: CurrentUser, db: DB):
     return result.scalar_one_or_none()
 
 
+@router.get("/{node_id}/metrics/history", response_model=list[NodeMetricHistoryPoint])
+async def get_metric_history(node_id: uuid.UUID, _: CurrentUser, db: DB, range: str = "24h", points: int = 48):
+    amount = 24
+    unit = "h"
+    if range.endswith("d"):
+        amount = int(range[:-1] or "7")
+        unit = "d"
+    elif range.endswith("h"):
+        amount = int(range[:-1] or "24")
+    else:
+        raise HTTPException(status_code=400, detail="Invalid range, use formats like 24h or 7d")
+
+    delta = timedelta(days=amount) if unit == "d" else timedelta(hours=amount)
+    since = datetime.now(UTC) - delta
+    result = await db.execute(
+        select(NodeMetric)
+        .where(NodeMetric.node_id == node_id, NodeMetric.created_at >= since)
+        .order_by(NodeMetric.created_at.asc())
+    )
+    rows = result.scalars().all()
+    if len(rows) <= max(points, 2):
+        return rows
+
+    stride = max(1, len(rows) // points)
+    sampled = rows[::stride]
+    if sampled[-1].id != rows[-1].id:
+        sampled.append(rows[-1])
+    return sampled
+
+
 @router.get("/{node_id}/tasks", response_model=list[TaskOutFull])
 async def get_node_tasks(node_id: uuid.UUID, _: CurrentUser, db: DB):
     result = await db.execute(
@@ -177,7 +271,7 @@ async def get_node_tasks(node_id: uuid.UUID, _: CurrentUser, db: DB):
 
 
 @router.post("/{node_id}/tasks", response_model=TaskOutFull, status_code=201)
-async def create_task(node_id: uuid.UUID, body: TaskCreate, _: CurrentUser, db: DB):
+async def create_task(node_id: uuid.UUID, body: TaskCreate, user: CurrentOperator, db: DB):
     if body.type not in ALLOWED_TASK_TYPES:
         raise HTTPException(status_code=400, detail=f"Task type '{body.type}' is not allowed")
 
@@ -185,11 +279,25 @@ async def create_task(node_id: uuid.UUID, body: TaskCreate, _: CurrentUser, db: 
     node = result.scalar_one_or_none()
     if not node:
         raise HTTPException(status_code=404, detail="Node not found")
+    if node.capabilities and body.type not in node.capabilities:
+        raise HTTPException(status_code=400, detail=f"Node agent does not advertise capability '{body.type}'")
 
     task = Task(node_id=node_id, type=body.type, payload=body.payload)
     db.add(task)
+    await db.flush()
+    await log_action(
+        db,
+        user=user,
+        action="tasks.create",
+        target_type="task",
+        target_id=str(task.id),
+        node_id=node_id,
+        message=f"Task {body.type} created for {node.name}",
+        details={"type": body.type, "payload": body.payload},
+    )
     await db.commit()
     await db.refresh(task)
+    await publish_event("tasks.changed", {"task_id": str(task.id), "node_id": str(node_id), "type": body.type})
     return task
 
 
@@ -238,7 +346,7 @@ async def create_agent_update_task(node: Node, payload: dict, db: DB) -> Task:
 
 
 @router.post("/{node_id}/update-agent", response_model=TaskOutFull, status_code=201)
-async def update_agent(node_id: uuid.UUID, _: CurrentUser, db: DB):
+async def update_agent(node_id: uuid.UUID, user: CurrentOperator, db: DB):
     """Fetch latest agent release from GitHub and create an agent.update task."""
     result = await db.execute(select(Node).where(Node.id == node_id))
     node = result.scalar_one_or_none()
@@ -253,13 +361,24 @@ async def update_agent(node_id: uuid.UUID, _: CurrentUser, db: DB):
         raise HTTPException(status_code=502, detail=f"Failed to resolve latest agent release: {e}")
 
     task = await create_agent_update_task(node, payload, db)
+    await log_action(
+        db,
+        user=user,
+        action="agent.update.schedule",
+        target_type="task",
+        target_id=str(task.id),
+        node_id=node.id,
+        message=f"Agent update scheduled for {node.name}",
+        details=payload,
+    )
     await db.commit()
     await db.refresh(task)
+    await publish_event("tasks.changed", {"task_id": str(task.id), "node_id": str(node.id), "type": task.type})
     return task
 
 
 @router.post("/update-agents", response_model=list[TaskOutFull], status_code=201)
-async def update_outdated_agents(_: CurrentUser, db: DB):
+async def update_outdated_agents(user: CurrentOperator, db: DB):
     try:
         payload_by_arch = {
             "amd64": await build_agent_update_payload("amd64"),
@@ -281,4 +400,17 @@ async def update_outdated_agents(_: CurrentUser, db: DB):
     await db.commit()
     for task in tasks:
         await db.refresh(task)
+        await log_action(
+            db,
+            user=user,
+            action="agent.update.schedule_bulk",
+            target_type="task",
+            target_id=str(task.id),
+            node_id=task.node_id,
+            message="Bulk agent update scheduled",
+            details=task.payload,
+        )
+    if tasks:
+        await db.commit()
+        await publish_event("tasks.changed", {"count": len(tasks), "type": "agent.update"})
     return tasks

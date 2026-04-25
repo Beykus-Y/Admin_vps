@@ -1,14 +1,16 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AlertTriangle, ArrowUpCircle, Copy, Loader2, Plus, X } from "lucide-react";
 import Layout from "@/components/Layout";
 import { api, EnrollToken, isAgentOutdated, Node, VersionInfo } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 import { formatFullDateTime, formatNumber, formatRelativeTime, statusLabel } from "@/lib/format";
 import { isMasterNode, primaryNodeIP } from "@/lib/inventory";
 import { Card, FilterChip, Pill, SearchBar, SoftButton, StatCard, StatusDot } from "@/components/ui";
+import { useLiveReload } from "@/lib/live";
 
 type Filter = "all" | "online" | "offline" | "pending";
 
@@ -169,6 +171,7 @@ function AddNodeModal({ onClose, onCreated }: { onClose: () => void; onCreated: 
 
 export default function NodesPage() {
   const router = useRouter();
+  const { user } = useAuth();
   const [nodes, setNodes] = useState<Node[]>([]);
   const [latestAgentVersion, setLatestAgentVersion] = useState<string | null>(null);
   const [showModal, setShowModal] = useState(false);
@@ -178,7 +181,7 @@ export default function NodesPage() {
   const [bulkUpdateMsg, setBulkUpdateMsg] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  async function load() {
+  const load = useCallback(async () => {
     const token = localStorage.getItem("token");
     if (!token) {
       router.push("/login");
@@ -196,9 +199,10 @@ export default function NodesPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [router]);
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { void load(); }, [load]);
+  useLiveReload(Boolean(nodes.length || latestAgentVersion), load);
 
   async function handleUpdateOutdatedAgents() {
     setBulkUpdateLoading(true);
@@ -247,16 +251,18 @@ export default function NodesPage() {
           </div>
           <div className="flex flex-col gap-2 sm:flex-row xl:ml-auto">
             <SearchBar value={search} onChange={setSearch} placeholder="Имя, IP, провайдер или локация..." className="sm:w-80" />
-            {outdatedCount > 0 && (
+            {user && user.role !== "viewer" && outdatedCount > 0 && (
               <SoftButton onClick={handleUpdateOutdatedAgents} disabled={bulkUpdateLoading} variant="yellow">
                 {bulkUpdateLoading ? <Loader2 size={15} className="animate-spin" /> : <ArrowUpCircle size={15} />}
                 Обновить устаревших
               </SoftButton>
             )}
-            <SoftButton onClick={() => setShowModal(true)} variant="primary">
-              <Plus size={15} />
-              Добавить ноду
-            </SoftButton>
+            {user && user.role !== "viewer" && (
+              <SoftButton onClick={() => setShowModal(true)} variant="primary">
+                <Plus size={15} />
+                Добавить ноду
+              </SoftButton>
+            )}
           </div>
         </div>
 
@@ -273,7 +279,7 @@ export default function NodesPage() {
         )}
       </div>
 
-      {showModal && <AddNodeModal onClose={() => setShowModal(false)} onCreated={load} />}
+      {showModal && <AddNodeModal onClose={() => setShowModal(false)} onCreated={() => void load()} />}
     </Layout>
   );
 }

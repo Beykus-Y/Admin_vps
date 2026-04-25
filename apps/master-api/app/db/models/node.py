@@ -27,6 +27,7 @@ class Node(UUIDMixin, TimestampMixin, Base):
     group_name: Mapped[str | None] = mapped_column(String(64))
     tags: Mapped[list] = mapped_column(JSONB, default=list)
     agent_version: Mapped[str | None] = mapped_column(String(32))
+    capabilities: Mapped[list] = mapped_column(JSONB, default=list)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     enroll_tokens: Mapped[list["NodeEnrollToken"]] = relationship(back_populates="node", cascade="all, delete-orphan")

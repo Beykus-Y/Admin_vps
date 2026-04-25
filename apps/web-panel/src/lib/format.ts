@@ -90,6 +90,9 @@ export function statusLabel(status: string | null | undefined): string {
     stale: "устарел",
     success: "успешно",
     failed: "ошибка",
+    acknowledged: "подтверждено",
+    silenced: "приглушено",
+    resolved: "закрыто",
   }[status ?? ""] ?? (status || "нет данных");
 }
 
@@ -107,5 +110,19 @@ export function taskTypeLabel(type: string): string {
     "container.restart": "Перезапуск контейнера",
     "container.stop": "Остановка контейнера",
     "container.start": "Запуск контейнера",
+    "container.logs": "Логи контейнера",
+    "docker.compose.pull": "docker compose pull",
+    "docker.compose.up": "docker compose up",
+    "docker.compose.down": "docker compose down",
+    "system.reboot": "Перезагрузка ноды",
+    "master.update": "Обновление мастера",
   }[type] ?? type;
+}
+
+export function roleLabel(role: string | null | undefined): string {
+  return {
+    admin: "админ",
+    operator: "оператор",
+    viewer: "наблюдатель",
+  }[role ?? ""] ?? (role || "пользователь");
 }

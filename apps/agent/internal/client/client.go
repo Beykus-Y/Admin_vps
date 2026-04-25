@@ -60,6 +60,7 @@ type EnrollRequest struct {
 	OS           string `json:"os,omitempty"`
 	Arch         string `json:"arch,omitempty"`
 	AgentVersion string `json:"agent_version"`
+	Capabilities []string `json:"capabilities,omitempty"`
 }
 
 type EnrollResponse struct {
@@ -86,12 +87,14 @@ func (c *Client) Enroll(ctx context.Context, req EnrollRequest) (*EnrollResponse
 type HeartbeatRequest struct {
 	AgentVersion string `json:"agent_version"`
 	Status       string `json:"status"`
+	Capabilities []string `json:"capabilities,omitempty"`
 }
 
-func (c *Client) Heartbeat(ctx context.Context, version string) error {
+func (c *Client) Heartbeat(ctx context.Context, version string, capabilities []string) error {
 	_, status, err := c.do(ctx, "POST", "/agent/heartbeat", HeartbeatRequest{
 		AgentVersion: version,
 		Status:       "online",
+		Capabilities: capabilities,
 	})
 	if err != nil {
 		return err
@@ -161,6 +164,7 @@ type SnapshotRequest struct {
 	ContainersCollected bool                 `json:"containers_collected"`
 	PortsCollected      bool                 `json:"ports_collected"`
 	Errors              []string             `json:"errors"`
+	Capabilities        []string             `json:"capabilities,omitempty"`
 }
 
 func (c *Client) Snapshot(ctx context.Context, snap SnapshotRequest) error {

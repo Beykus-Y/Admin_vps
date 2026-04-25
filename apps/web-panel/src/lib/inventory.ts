@@ -1,13 +1,7 @@
 import { api } from "@/lib/api";
-import type { Container, Node, NodeEvent, NodeMetric, Port } from "@/lib/api";
+import type { Container, InventoryNode as ApiInventoryNode, Node, NodeEvent, NodeMetric, Port } from "@/lib/api";
 
-export interface InventoryNode {
-  node: Node;
-  containers: Container[];
-  ports: Port[];
-  metrics: NodeMetric | null;
-  events: NodeEvent[];
-}
+export interface InventoryNode extends ApiInventoryNode {}
 
 export interface InventoryContainer extends Container {
   node_id: string;
@@ -36,20 +30,12 @@ export function isMasterNode(node: Node): boolean {
 }
 
 export async function loadInventory(): Promise<InventoryNode[]> {
-  const nodes = await api.nodes.list();
+  const snapshot = await api.inventory.get();
+  return snapshot.nodes;
+}
 
-  return Promise.all(
-    nodes.map(async (node) => {
-      const [containers, ports, metrics, events] = await Promise.all([
-        api.nodes.containers(node.id).catch(() => [] as Container[]),
-        api.nodes.ports(node.id).catch(() => [] as Port[]),
-        api.nodes.metricsLatest(node.id).catch(() => null as NodeMetric | null),
-        api.nodes.events(node.id).catch(() => [] as NodeEvent[]),
-      ]);
-
-      return { node, containers, ports, metrics, events };
-    })
-  );
+export async function loadInventorySnapshot() {
+  return api.inventory.get();
 }
 
 export function flattenContainers(inventory: InventoryNode[]): InventoryContainer[] {
@@ -78,12 +64,20 @@ export function flattenPorts(inventory: InventoryNode[]): InventoryPort[] {
 
 export function flattenEvents(inventory: InventoryNode[]): InventoryEvent[] {
   return inventory
-    .flatMap(({ node, events }) =>
-      events.map((event) => ({
-        ...event,
-        node_id: event.node_id ?? node.id,
+    .flatMap(({ node, incidents }) =>
+      incidents.map((incident) => ({
+        id: incident.id,
+        node_id: node.id,
         node_name: node.name,
+        severity: incident.severity,
+        type: incident.rule_kind,
+        message: incident.message,
+        created_at: incident.last_seen_at,
       }))
     )
     .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+}
+
+export function latestMetric(item: InventoryNode): NodeMetric | null {
+  return item.metrics;
 }

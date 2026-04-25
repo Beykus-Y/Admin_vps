@@ -1,12 +1,12 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class TaskCreate(BaseModel):
     type: str
-    payload: dict = {}
+    payload: dict = Field(default_factory=dict)
 
 
 ALLOWED_TASK_TYPES = {

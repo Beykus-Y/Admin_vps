@@ -1,3 +1,4 @@
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -7,6 +8,7 @@ class Settings(BaseSettings):
     app_name: str = "FilinControl Master API"
     app_version: str = "dev"
     debug: bool = False
+    cors_origins: list[str] = Field(default_factory=lambda: ["*"])
 
     database_url: str = "postgresql+asyncpg://filin:filin@postgres:5432/filin"
     redis_url: str = "redis://redis:6379/0"
@@ -22,6 +24,8 @@ class Settings(BaseSettings):
     agent_auto_update_enabled: bool = False
     agent_auto_update_check_seconds: int = 300
     agent_auto_update_batch_size: int = 1
+    sse_ping_seconds: int = 20
+    alert_notification_timeout_seconds: int = 10
 
 
 settings = Settings()
