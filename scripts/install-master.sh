@@ -54,11 +54,20 @@ detect_proxy() {
 PROXY_ON_80=$(detect_proxy 80)
 PROXY_ON_443=$(detect_proxy 443)
 PROXY_PROC="${PROXY_ON_80:-${PROXY_ON_443:-}}"
+OWN_CADDY_CONTAINER=false
+
+if [[ -n "$PROXY_PROC" ]] && command -v docker &>/dev/null; then
+  if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx 'filincontrol-caddy-1'; then
+    OWN_CADDY_CONTAINER=true
+  fi
+fi
 
 USE_CADDY_CONTAINER=true
 EXTERNAL_PROXY=""
 
-if [[ -n "$PROXY_PROC" ]]; then
+if [[ "$OWN_CADDY_CONTAINER" == true ]]; then
+  ok "Ports 80/443 are used by existing FilinControl Caddy container — will reuse it"
+elif [[ -n "$PROXY_PROC" ]]; then
   case "$PROXY_PROC" in
     caddy)   EXTERNAL_PROXY="caddy"   ;;
     nginx)   EXTERNAL_PROXY="nginx"   ;;
@@ -242,8 +251,8 @@ done
 
 # ── Create admin user ─────────────────────────────────────────────────────────
 info "Creating admin user '${ADMIN_USER}'..."
-set +e
-INIT_RESPONSE=$("${DC[@]}" exec -T \
+init_admin_http() {
+  "${DC[@]}" exec -T \
   -e FC_ADMIN_USER="${ADMIN_USER}" \
   -e FC_ADMIN_PASS="${ADMIN_PASS}" \
   api python -c '
@@ -274,13 +283,86 @@ except urllib.error.HTTPError as exc:
 except Exception as exc:
     print(f"{type(exc).__name__}: {exc}", file=sys.stderr)
     sys.exit(2)
-' </dev/null 2>&1)
+' </dev/null
+}
+
+init_admin_direct() {
+  "${DC[@]}" exec -T \
+  -e FC_ADMIN_USER="${ADMIN_USER}" \
+  -e FC_ADMIN_PASS="${ADMIN_PASS}" \
+  api python -c '
+import asyncio
+import json
+import os
+import sys
+import traceback
+import uuid
+
+import bcrypt
+from sqlalchemy import select
+
+from app.db.base import AsyncSessionLocal
+from app.db.models import User
+
+
+async def main() -> None:
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(select(User.id).limit(1))
+        if result.scalar_one_or_none() is not None:
+            print(403)
+            print(json.dumps({"detail": "Admin already exists"}))
+            return
+
+        password_hash = bcrypt.hashpw(
+            os.environ["FC_ADMIN_PASS"].encode("utf-8"),
+            bcrypt.gensalt(),
+        ).decode("utf-8")
+        db.add(User(
+            id=uuid.uuid4(),
+            username=os.environ["FC_ADMIN_USER"],
+            password_hash=password_hash,
+            is_active=True,
+        ))
+        await db.commit()
+        print(200)
+        print(json.dumps({"detail": "Admin user created"}))
+
+
+try:
+    asyncio.run(main())
+except Exception:
+    traceback.print_exc(file=sys.stderr)
+    sys.exit(2)
+' </dev/null
+}
+
+set +e
+INIT_RESPONSE="$(init_admin_http 2>&1)"
 _INIT_EXIT=$?
 set -e
+
+if [[ $_INIT_EXIT -ne 0 ]]; then
+  warn "HTTP admin init failed — falling back to direct database bootstrap"
+  set +e
+  INIT_RESPONSE="$(init_admin_direct 2>&1)"
+  _INIT_EXIT=$?
+  set -e
+fi
 
 [[ $_INIT_EXIT -eq 0 ]] || die "Could not create admin user: ${INIT_RESPONSE}"
 HTTP_STATUS="$(printf '%s\n' "${INIT_RESPONSE}" | sed -n '1p')"
 HTTP_BODY="$(printf '%s\n' "${INIT_RESPONSE}" | sed '1d')"
+
+if [[ "$HTTP_STATUS" == "500" ]]; then
+  warn "HTTP admin init returned 500 — falling back to direct database bootstrap"
+  set +e
+  INIT_RESPONSE="$(init_admin_direct 2>&1)"
+  _INIT_EXIT=$?
+  set -e
+  [[ $_INIT_EXIT -eq 0 ]] || die "Could not create admin user: ${INIT_RESPONSE}"
+  HTTP_STATUS="$(printf '%s\n' "${INIT_RESPONSE}" | sed -n '1p')"
+  HTTP_BODY="$(printf '%s\n' "${INIT_RESPONSE}" | sed '1d')"
+fi
 
 case "$HTTP_STATUS" in
   200) ok "Admin user '${ADMIN_USER}' created" ;;
