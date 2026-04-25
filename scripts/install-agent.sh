@@ -56,7 +56,7 @@ go_version_ok() {
   rest="${version#*.}"
   minor="${rest%%.*}"
   [[ "$major" =~ ^[0-9]+$ && "$minor" =~ ^[0-9]+$ ]] || return 1
-  (( major > 1 || (major == 1 && minor >= 23) ))
+  (( major > 1 || (major == 1 && minor >= 22) ))
 }
 
 build_from_source() {
@@ -96,7 +96,7 @@ build_from_source() {
     mv "${tmpdir}/out/filin-agent" "$output"
   else
     rm -rf "$tmpdir"
-    echo "Error: no agent release is published and source build needs Go 1.23+ or Docker"
+    echo "Error: no agent release is published and source build needs Go 1.22+ or Docker"
     echo "  Publish an agent release or install Docker on this node, then rerun this installer."
     exit 1
   fi
@@ -172,7 +172,7 @@ fi
 if ! RELEASE_JSON=$(curl -fsSL \
   -H "Accept: application/vnd.github+json" \
   -H "X-GitHub-Api-Version: 2022-11-28" \
-  "$RELEASE_API"); then
+  "$RELEASE_API" 2>/dev/null); then
   echo "[3/7] No published agent release found — will build from source"
   RELEASE_JSON=""
   DOWNLOAD_URL=""
