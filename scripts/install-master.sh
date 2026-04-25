@@ -18,6 +18,18 @@ warn()  { echo -e "${YELLOW}[warn]${NC}  $*"; }
 die()   { echo -e "${RED}[fail]${NC}  $*" >&2; exit 1; }
 bold()  { echo -e "${BOLD}$*${NC}"; }
 
+is_ipv4() {
+  [[ "${1:-}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]
+}
+
+detect_public_ipv4() {
+  local ip
+  ip="$(curl -4fsS --max-time 5 https://api.ipify.org 2>/dev/null || true)"
+  if is_ipv4 "$ip"; then
+    printf '%s' "$ip"
+  fi
+}
+
 # ── Root check ────────────────────────────────────────────────────────────────
 [[ "$EUID" -ne 0 ]] && die "Run as root: sudo bash install-master.sh"
 
@@ -97,9 +109,10 @@ HOST="${HOST#http://}"; HOST="${HOST#https://}"; HOST="${HOST%%/*}"
 
 # IP/localhost → no TLS
 USE_TLS=true
-if [[ "$HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || [[ "$HOST" == "localhost" ]]; then
+if is_ipv4 "$HOST" || [[ "$HOST" == "localhost" ]]; then
   USE_TLS=false
 fi
+IP_FALLBACK_URL=""
 
 echo ""
 read -rp "  Admin username [admin]: " ADMIN_USER </dev/tty
@@ -175,12 +188,25 @@ chmod 600 "${ENV_FILE}"
 if [[ "$USE_CADDY_CONTAINER" == true ]]; then
   # Build Caddyfile
   if [[ "$USE_TLS" == true ]]; then
+    PUBLIC_IPV4="$(detect_public_ipv4)"
     cat > "${CADDYFILE}" <<EOF
 ${HOST} {
     reverse_proxy /api/* api:8000
     reverse_proxy web:3000
 }
 EOF
+    if [[ -n "$PUBLIC_IPV4" ]]; then
+      cat >> "${CADDYFILE}" <<EOF
+
+http://${PUBLIC_IPV4} {
+    reverse_proxy /api/* api:8000
+    reverse_proxy web:3000
+}
+EOF
+      IP_FALLBACK_URL="http://${PUBLIC_IPV4}"
+    else
+      warn "Could not detect public IPv4 — IP fallback skipped"
+    fi
   else
     cat > "${CADDYFILE}" <<EOF
 :80 {
@@ -189,7 +215,11 @@ EOF
 }
 EOF
   fi
-  ok "Caddyfile written ($([ "$USE_TLS" == true ] && echo "HTTPS" || echo "HTTP"))"
+  if [[ -n "$IP_FALLBACK_URL" ]]; then
+    ok "Caddyfile written (HTTPS + IP fallback)"
+  else
+    ok "Caddyfile written ($([ "$USE_TLS" == true ] && echo "HTTPS" || echo "HTTP"))"
+  fi
 else
   # External proxy: expose API (8000) and web (3000) on localhost and disable caddy container
   COMPOSE_OVERRIDE="${INSTALL_DIR}/docker-compose.override.yml"
@@ -490,6 +520,7 @@ echo ""
 if [[ "$USE_CADDY_CONTAINER" == true ]]; then
   if [[ "$USE_TLS" == true ]]; then
     echo "  Panel URL  : https://${HOST}"
+    [[ -n "$IP_FALLBACK_URL" ]] && echo "  IP fallback: ${IP_FALLBACK_URL}  (HTTP)"
     warn "Ensure DNS A-record for ${HOST} points here — Caddy issues TLS automatically"
   else
     echo "  Panel URL  : http://${HOST}"
