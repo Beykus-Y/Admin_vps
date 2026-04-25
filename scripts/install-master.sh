@@ -2,6 +2,7 @@
 set -euo pipefail
 
 # ── Constants ─────────────────────────────────────────────────────────────────
+INSTALLER_VERSION="0.2.0"
 GITHUB_REPO="Beykus-Y/Admin_vps"
 RAW_BASE="https://raw.githubusercontent.com/${GITHUB_REPO}/main"
 INSTALL_DIR="/opt/filincontrol"
@@ -21,8 +22,8 @@ bold()  { echo -e "${BOLD}$*${NC}"; }
 [[ "$EUID" -ne 0 ]] && die "Run as root: sudo bash install-master.sh"
 
 echo ""
-bold "  FilinControl — Master Server Installer"
-echo "  ────────────────────────────────────────"
+bold "  FilinControl — Master Server Installer v${INSTALLER_VERSION}"
+echo "  ────────────────────────────────────────────────────────"
 echo ""
 
 # ── OS / Arch ─────────────────────────────────────────────────────────────────
@@ -182,22 +183,23 @@ EOF
   ok "Compose override written (caddy disabled, ports 8000/3000 exposed on 127.0.0.1)"
 fi
 
+# ── Build compose args (file-existence check, safe for empty COMPOSE_OVERRIDE) ─
+DC=(docker compose -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}")
+[[ -n "${COMPOSE_OVERRIDE}" && -f "${COMPOSE_OVERRIDE}" ]] && DC+=(-f "${COMPOSE_OVERRIDE}")
+
 # ── Step 4: Pull images ───────────────────────────────────────────────────────
 info "[4/6] Pulling Docker images..."
-docker compose -f "${COMPOSE_FILE}" ${COMPOSE_OVERRIDE:+-f "${COMPOSE_OVERRIDE}"} \
-  --env-file "${ENV_FILE}" pull
+"${DC[@]}" pull
 ok "Images pulled"
 
 # ── Step 5: Migrations ────────────────────────────────────────────────────────
 info "[5/6] Running database migrations..."
-docker compose -f "${COMPOSE_FILE}" ${COMPOSE_OVERRIDE:+-f "${COMPOSE_OVERRIDE}"} \
-  --env-file "${ENV_FILE}" run --rm migrate
+"${DC[@]}" run --rm migrate
 ok "Migrations complete"
 
 # ── Step 6: Start ─────────────────────────────────────────────────────────────
 info "[6/6] Starting services..."
-docker compose -f "${COMPOSE_FILE}" ${COMPOSE_OVERRIDE:+-f "${COMPOSE_OVERRIDE}"} \
-  --env-file "${ENV_FILE}" up -d --remove-orphans
+"${DC[@]}" up -d --remove-orphans
 ok "Services started"
 
 # ── Wait for API ──────────────────────────────────────────────────────────────
