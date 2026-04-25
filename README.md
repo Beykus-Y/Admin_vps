@@ -81,16 +81,25 @@ AGENT_AUTO_UPDATE_ENABLED=true
 
 | Workflow | Trigger | Result |
 |----------|---------|--------|
-| `docker.yml` | push to `main` (apps/master-api or apps/web-panel) | Builds & pushes `ghcr.io/beykus-y/filincontrol-api:latest` and `filincontrol-web:latest` |
-| `agent-release.yml` | push tag `agent/v*` or manual dispatch | Builds Linux amd64/arm64 binaries, creates GitHub Release |
-| `deploy.yml` | after Docker images built, or manual | SSH deploy to VPS |
+| `release.yml` | push to `main` or manual dispatch | Reads `VERSION`, creates missing master/agent releases, pushes Docker images and agent binaries |
+| `docker.yml` | manual dispatch | Manually builds and pushes master Docker images |
+| `agent-release.yml` | manual dispatch | Manually builds Linux amd64/arm64 binaries and creates an agent release |
+| `deploy.yml` | manual dispatch | SSH deploy to VPS |
 
-### Publish a new agent release
+### Versioned releases
 
-```bash
-git tag agent/v0.2.0
-git push origin agent/v0.2.0
+Update `VERSION` and push to `main`:
+
+```text
+Master=0.1.2
+Agent=0.1.1
 ```
+
+The release workflow compares these versions with existing tags:
+
+- missing `master/vX.Y.Z` → builds API/web images, tags them as `latest` and `X.Y.Z`, creates a master release;
+- missing `agent/vX.Y.Z` → builds `filin-agent-linux-amd64` and `filin-agent-linux-arm64`, creates an agent release;
+- existing tag → skips that component.
 
 ### Setup auto-deploy (optional)
 
@@ -134,8 +143,9 @@ deploy/
   docker-compose.prod.yml  pre-built images
   caddy/Caddyfile
 .github/workflows/
-  docker.yml        build & push images
-  agent-release.yml release agent binaries
+  release.yml       VERSION-driven master/agent releases
+  docker.yml        manual image build fallback
+  agent-release.yml manual agent release fallback
   deploy.yml        SSH deploy to VPS
 scripts/
   install-agent.sh  one-command agent installer

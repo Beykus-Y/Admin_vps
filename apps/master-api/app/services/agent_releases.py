@@ -18,7 +18,7 @@ class AgentRelease:
 
     @property
     def version(self) -> str:
-        return self.tag_name.removeprefix("agent/")
+        return self.tag_name.removeprefix("agent/v").removeprefix("agent/")
 
 
 def normalize_agent_version(version: str | None) -> tuple[int, int, int] | None:

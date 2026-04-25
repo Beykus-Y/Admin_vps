@@ -1,0 +1,268 @@
+name: Release From VERSION
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  resolve:
+    name: Resolve release plan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      master_version: ${{ steps.version.outputs.master_version }}
+      agent_version: ${{ steps.version.outputs.agent_version }}
+      release_master: ${{ steps.version.outputs.release_master }}
+      release_agent: ${{ steps.version.outputs.release_agent }}
+      owner_lc: ${{ steps.version.outputs.owner_lc }}
+      sha_short: ${{ steps.version.outputs.sha_short }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read VERSION and compare tags
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          master_version="$(sed -n 's/^Master=//p' VERSION | tr -d '[:space:]')"
+          agent_version="$(sed -n 's/^Agent=//p' VERSION | tr -d '[:space:]')"
+
+          [[ "$master_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "Invalid Master version in VERSION: '$master_version'" >&2
+            exit 1
+          }
+          [[ "$agent_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "Invalid Agent version in VERSION: '$agent_version'" >&2
+            exit 1
+          }
+
+          master_tag="master/v${master_version}"
+          agent_tag="agent/v${agent_version}"
+
+          release_master=true
+          release_agent=true
+          if git ls-remote --exit-code --tags origin "refs/tags/${master_tag}" >/dev/null 2>&1; then
+            release_master=false
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/${agent_tag}" >/dev/null 2>&1; then
+            release_agent=false
+          fi
+
+          owner_lc="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
+          sha_short="${GITHUB_SHA::7}"
+
+          echo "master_version=${master_version}" >> "$GITHUB_OUTPUT"
+          echo "agent_version=${agent_version}" >> "$GITHUB_OUTPUT"
+          echo "release_master=${release_master}" >> "$GITHUB_OUTPUT"
+          echo "release_agent=${release_agent}" >> "$GITHUB_OUTPUT"
+          echo "owner_lc=${owner_lc}" >> "$GITHUB_OUTPUT"
+          echo "sha_short=${sha_short}" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "## Release plan"
+            echo "Master: ${master_version} (${master_tag}) release=${release_master}"
+            echo "Agent: ${agent_version} (${agent_tag}) release=${release_agent}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  master-images:
+    name: Build master Docker images
+    needs: resolve
+    if: needs.resolve.outputs.release_master == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push API image
+        uses: docker/build-push-action@v6
+        with:
+          context: apps/master-api
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ needs.resolve.outputs.owner_lc }}/filincontrol-api:latest
+            ${{ env.REGISTRY }}/${{ needs.resolve.outputs.owner_lc }}/filincontrol-api:${{ needs.resolve.outputs.master_version }}
+            ${{ env.REGISTRY }}/${{ needs.resolve.outputs.owner_lc }}/filincontrol-api:sha-${{ needs.resolve.outputs.sha_short }}
+          labels: |
+            org.opencontainers.image.version=${{ needs.resolve.outputs.master_version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          build-args: |
+            APP_VERSION=${{ needs.resolve.outputs.master_version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push web image
+        uses: docker/build-push-action@v6
+        with:
+          context: apps/web-panel
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ needs.resolve.outputs.owner_lc }}/filincontrol-web:latest
+            ${{ env.REGISTRY }}/${{ needs.resolve.outputs.owner_lc }}/filincontrol-web:${{ needs.resolve.outputs.master_version }}
+            ${{ env.REGISTRY }}/${{ needs.resolve.outputs.owner_lc }}/filincontrol-web:sha-${{ needs.resolve.outputs.sha_short }}
+          labels: |
+            org.opencontainers.image.version=${{ needs.resolve.outputs.master_version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  master-release:
+    name: Create master release
+    needs: [resolve, master-images]
+    if: needs.resolve.outputs.release_master == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create master tag
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tag = `master/v${{ needs.resolve.outputs.master_version }}`;
+            try {
+              await github.rest.git.createRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: `refs/tags/${tag}`,
+                sha: context.sha,
+              });
+            } catch (error) {
+              if (error.status !== 422) throw error;
+            }
+
+      - name: Publish master release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: master/v${{ needs.resolve.outputs.master_version }}
+          target_commitish: ${{ github.sha }}
+          name: Master ${{ needs.resolve.outputs.master_version }}
+          body: |
+            ## FilinControl Master ${{ needs.resolve.outputs.master_version }}
+
+            Docker images:
+            - `ghcr.io/${{ needs.resolve.outputs.owner_lc }}/filincontrol-api:${{ needs.resolve.outputs.master_version }}`
+            - `ghcr.io/${{ needs.resolve.outputs.owner_lc }}/filincontrol-web:${{ needs.resolve.outputs.master_version }}`
+            - `ghcr.io/${{ needs.resolve.outputs.owner_lc }}/filincontrol-api:latest`
+            - `ghcr.io/${{ needs.resolve.outputs.owner_lc }}/filincontrol-web:latest`
+          draft: false
+          prerelease: false
+
+  agent-build:
+    name: Build agent binaries
+    needs: resolve
+    if: needs.resolve.outputs.release_agent == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            suffix: linux-amd64
+          - goos: linux
+            goarch: arm64
+            suffix: linux-arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+          cache-dependency-path: apps/agent/go.sum
+
+      - name: Build
+        working-directory: apps/agent
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          go build \
+            -ldflags="-s -w -X main.version=${{ needs.resolve.outputs.agent_version }}" \
+            -o filin-agent-${{ matrix.suffix }} \
+            ./cmd/agent
+
+      - name: Compute checksum
+        working-directory: apps/agent
+        run: |
+          sha256sum filin-agent-${{ matrix.suffix }} > filin-agent-${{ matrix.suffix }}.sha256
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: filin-agent-${{ matrix.suffix }}
+          path: |
+            apps/agent/filin-agent-${{ matrix.suffix }}
+            apps/agent/filin-agent-${{ matrix.suffix }}.sha256
+
+  agent-release:
+    name: Create agent release
+    needs: [resolve, agent-build]
+    if: needs.resolve.outputs.release_agent == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/
+          merge-multiple: true
+
+      - name: Create agent tag
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tag = `agent/v${{ needs.resolve.outputs.agent_version }}`;
+            try {
+              await github.rest.git.createRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: `refs/tags/${tag}`,
+                sha: context.sha,
+              });
+            } catch (error) {
+              if (error.status !== 422) throw error;
+            }
+
+      - name: Publish agent release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: agent/v${{ needs.resolve.outputs.agent_version }}
+          target_commitish: ${{ github.sha }}
+          name: Agent ${{ needs.resolve.outputs.agent_version }}
+          body: |
+            ## FilinControl Agent ${{ needs.resolve.outputs.agent_version }}
+
+            Install through the panel or run the generated Add Node command.
+
+            Manual assets:
+            - `filin-agent-linux-amd64`
+            - `filin-agent-linux-arm64`
+          files: |
+            dist/filin-agent-linux-amd64
+            dist/filin-agent-linux-amd64.sha256
+            dist/filin-agent-linux-arm64
+            dist/filin-agent-linux-arm64.sha256
+          draft: false
+          prerelease: false
