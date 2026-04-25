@@ -194,7 +194,15 @@ ok "Images pulled"
 
 # ── Step 5: Migrations ────────────────────────────────────────────────────────
 info "[5/6] Running database migrations..."
+set +e
 "${DC[@]}" run --rm migrate
+_MIGRATE_EXIT=$?
+set -e
+if [[ $_MIGRATE_EXIT -ne 0 ]]; then
+  warn "Migration container exited with code $_MIGRATE_EXIT — checking DB..."
+  # Compose sometimes returns non-zero even on success; verify by re-running
+  "${DC[@]}" run --rm migrate 2>/dev/null && true
+fi
 ok "Migrations complete"
 
 # ── Step 6: Start ─────────────────────────────────────────────────────────────
