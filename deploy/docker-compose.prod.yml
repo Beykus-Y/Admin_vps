@@ -1,0 +1,83 @@
+services:
+  api:
+    image: ghcr.io/beykus-y/filincontrol-api:latest
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+asyncpg://filin:filin@postgres:5432/filin
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: ${JWT_SECRET}
+      DEBUG: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - internal
+
+  web:
+    image: ghcr.io/beykus-y/filincontrol-web:latest
+    restart: unless-stopped
+    networks:
+      - internal
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: filin
+      POSTGRES_PASSWORD: filin
+      POSTGRES_DB: filin
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U filin -d filin"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - internal
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    networks:
+      - internal
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+      - web
+    networks:
+      - internal
+
+  migrate:
+    image: ghcr.io/beykus-y/filincontrol-api:latest
+    command: alembic upgrade head
+    environment:
+      DATABASE_URL: postgresql+asyncpg://filin:filin@postgres:5432/filin
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - internal
+    restart: no
+
+volumes:
+  postgres_data:
+  caddy_data:
+  caddy_config:
+
+networks:
+  internal:
+    driver: bridge

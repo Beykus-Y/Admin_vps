@@ -1,0 +1,4 @@
+panel.example.com {
+    reverse_proxy /api/* api:8000
+    reverse_proxy web:3000
+}

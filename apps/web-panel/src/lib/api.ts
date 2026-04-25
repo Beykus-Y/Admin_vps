@@ -1,0 +1,135 @@
+const BASE_URL = process.env.NEXT_PUBLIC_API_URL || "";
+
+function getToken(): string | null {
+  if (typeof window === "undefined") return null;
+  return localStorage.getItem("token");
+}
+
+async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const token = getToken();
+  const headers: HeadersInit = {
+    "Content-Type": "application/json",
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...options.headers,
+  };
+  const res = await fetch(`${BASE_URL}/api${path}`, { ...options, headers });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || "Request failed");
+  }
+  if (res.status === 204) return undefined as T;
+  return res.json();
+}
+
+export const api = {
+  login: (username: string, password: string) =>
+    request<{ access_token: string }>("/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ username, password }),
+    }),
+
+  initAdmin: (username: string, password: string) =>
+    request<{ access_token: string }>("/auth/init", {
+      method: "POST",
+      body: JSON.stringify({ username, password }),
+    }),
+
+  overview: () => request<Overview>("/overview"),
+
+  nodes: {
+    list: () => request<Node[]>("/nodes"),
+    get: (id: string) => request<Node>(`/nodes/${id}`),
+    create: (data: { name: string; provider?: string; location?: string; group_name?: string }) =>
+      request<Node>("/nodes", { method: "POST", body: JSON.stringify(data) }),
+    delete: (id: string) => request<void>(`/nodes/${id}`, { method: "DELETE" }),
+    createEnrollToken: (id: string) => request<EnrollToken>(`/nodes/${id}/enroll-token`, { method: "POST" }),
+    containers: (id: string) => request<Container[]>(`/nodes/${id}/containers`),
+    ports: (id: string) => request<Port[]>(`/nodes/${id}/ports`),
+    tasks: (id: string) => request<Task[]>(`/nodes/${id}/tasks`),
+    createTask: (id: string, type: string, payload: Record<string, unknown>) =>
+      request<Task>(`/nodes/${id}/tasks`, { method: "POST", body: JSON.stringify({ type, payload }) }),
+    events: (id: string) => request<NodeEvent[]>(`/nodes/${id}/events`),
+    markPortExpected: (nodeId: string, portId: string, expected: boolean) =>
+      request<void>(`/nodes/${nodeId}/ports/${portId}/expected?expected=${expected}`, { method: "PATCH" }),
+    updateAgent: (id: string) =>
+      request<Task>(`/nodes/${id}/update-agent`, { method: "POST" }),
+  },
+};
+
+export interface Node {
+  id: string;
+  name: string;
+  status: "pending" | "online" | "offline";
+  hostname: string | null;
+  public_ip: string | null;
+  os: string | null;
+  arch: string | null;
+  provider: string | null;
+  location: string | null;
+  group_name: string | null;
+  tags: string[];
+  agent_version: string | null;
+  created_at: string;
+  last_seen_at: string | null;
+}
+
+export interface Overview {
+  nodes: { total: number; online: number; offline: number; pending: number };
+  containers: { total: number; running: number };
+  recent_events: NodeEvent[];
+}
+
+export interface Container {
+  id: string;
+  container_id: string;
+  name: string;
+  image: string | null;
+  status: string | null;
+  state: string | null;
+  ports: string[];
+  cpu_percent: number | null;
+  ram_mb: number | null;
+  restart_count: number | null;
+  health_status: string | null;
+  updated_at: string | null;
+}
+
+export interface Port {
+  id: string;
+  protocol: string;
+  port: number;
+  listen_ip: string | null;
+  process_name: string | null;
+  container_name: string | null;
+  is_expected: boolean;
+  first_seen_at: string | null;
+  last_seen_at: string | null;
+}
+
+export interface Task {
+  id: string;
+  node_id: string;
+  type: string;
+  payload: Record<string, unknown>;
+  status: string;
+  result: Record<string, unknown> | null;
+  error: string | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export interface EnrollToken {
+  install_command: string;
+  enroll_token: string;
+  expires_at: string;
+}
+
+export interface NodeEvent {
+  id: string;
+  node_id: string | null;
+  severity: "info" | "warning" | "critical";
+  type: string;
+  message: string;
+  created_at: string;
+}

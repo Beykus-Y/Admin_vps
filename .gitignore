@@ -1,0 +1,55 @@
+# ── Python ──────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.venv/
+venv/
+env/
+.env
+.env.*
+!.env.example
+*.log
+*.pot
+*.pyc
+
+# ── Go ──────────────────────────────────────────────────
+apps/agent/filin-agent
+apps/agent/filin-agent-*
+apps/agent/vendor/
+
+# ── Next.js ─────────────────────────────────────────────
+apps/web-panel/.next/
+apps/web-panel/out/
+apps/web-panel/node_modules/
+apps/web-panel/.env.local
+apps/web-panel/.env.production
+
+# ── Docker / Deploy ─────────────────────────────────────
+deploy/.env
+deploy/caddy/data/
+deploy/caddy/config/
+
+# ── OS ──────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── IDE ─────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ── Secrets ─────────────────────────────────────────────
+*.pem
+*.key
+*.cert
+*.p12
+secrets/

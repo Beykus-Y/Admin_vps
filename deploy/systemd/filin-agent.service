@@ -1,0 +1,13 @@
+[Unit]
+Description=Filin Agent
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/filin-agent --config /etc/filin-agent/config.yml
+Restart=always
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target

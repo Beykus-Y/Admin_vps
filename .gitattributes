@@ -1,0 +1,17 @@
+# Default: normalize line endings to LF in repo
+* text=auto eol=lf
+
+# Shell scripts must be LF
+*.sh text eol=lf
+
+# Go files
+*.go text eol=lf
+
+# Windows-specific files
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binaries
+*.png binary
+*.jpg binary
+*.ico binary
