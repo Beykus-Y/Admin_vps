@@ -36,27 +36,18 @@ func StartSession(ctx context.Context, c *client.Client, sessionID string, shell
 	}
 	defer conn.close()
 
-	cmd := terminalCommand(shell)
+	cmd := exec.Command(allowedShell(shell))
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color", "COLORTERM=truecolor")
-	stdin, err := cmd.StdinPipe()
+
+	ptmx, err := startInPTY(cmd)
 	if err != nil {
-		return err
+		return fmt.Errorf("start PTY: %w", err)
 	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return err
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return err
-	}
-	if err := cmd.Start(); err != nil {
-		return err
-	}
+	defer ptmx.Close()
 
 	var writeMu sync.Mutex
-	send := func(message wsMessage) {
-		data, err := json.Marshal(message)
+	send := func(msg wsMessage) {
+		data, err := json.Marshal(msg)
 		if err != nil {
 			return
 		}
@@ -66,9 +57,22 @@ func StartSession(ctx context.Context, c *client.Client, sessionID string, shell
 	}
 	send(wsMessage{Type: "status", Message: "Shell started"})
 
+	// PTY output → browser
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			n, err := ptmx.Read(buf)
+			if n > 0 {
+				send(wsMessage{Type: "output", Data: string(buf[:n])})
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	// Browser input → PTY
 	done := make(chan struct{})
-	go copyOutput(stdout, send)
-	go copyOutput(stderr, send)
 	go func() {
 		defer close(done)
 		for {
@@ -77,28 +81,29 @@ func StartSession(ctx context.Context, c *client.Client, sessionID string, shell
 				killProcess(cmd)
 				return
 			}
-			var message wsMessage
-			if err := json.Unmarshal([]byte(raw), &message); err != nil {
+			var msg wsMessage
+			if err := json.Unmarshal([]byte(raw), &msg); err != nil {
 				continue
 			}
-			switch message.Type {
+			switch msg.Type {
 			case "input":
-				if _, err := io.WriteString(stdin, message.Data); err != nil {
+				if _, err := io.WriteString(ptmx, msg.Data); err != nil {
 					killProcess(cmd)
 					return
+				}
+			case "resize":
+				if msg.Cols > 0 && msg.Rows > 0 {
+					_ = resizePTY(ptmx, msg.Cols, msg.Rows)
 				}
 			case "close":
 				killProcess(cmd)
 				return
-			case "resize":
-				continue
 			}
 		}
 	}()
 
-	waitErr := cmd.Wait()
 	exitCode := 0
-	if waitErr != nil {
+	if waitErr := cmd.Wait(); waitErr != nil {
 		if exitError, ok := waitErr.(*exec.ExitError); ok {
 			exitCode = exitError.ExitCode()
 		} else {
@@ -109,27 +114,6 @@ func StartSession(ctx context.Context, c *client.Client, sessionID string, shell
 	_ = conn.close()
 	<-done
 	return nil
-}
-
-func copyOutput(reader io.Reader, send func(wsMessage)) {
-	buffer := make([]byte, 4096)
-	for {
-		n, err := reader.Read(buffer)
-		if n > 0 {
-			send(wsMessage{Type: "output", Data: string(buffer[:n])})
-		}
-		if err != nil {
-			return
-		}
-	}
-}
-
-func terminalCommand(shell string) *exec.Cmd {
-	shell = allowedShell(shell)
-	if scriptPath, err := exec.LookPath("script"); err == nil {
-		return exec.Command(scriptPath, "-qfec", shell, "/dev/null")
-	}
-	return exec.Command(shell, "-i")
 }
 
 func allowedShell(shell string) string {

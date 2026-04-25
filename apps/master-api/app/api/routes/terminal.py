@@ -130,13 +130,16 @@ async def browser_terminal_ws(websocket: WebSocket, session_id: str, token: str)
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
 
-    await websocket.send_text(json.dumps({"type": "status", "status": "waiting", "message": "Waiting for agent"}))
+    if session.agent_connected:
+        await websocket.send_text(json.dumps({"type": "status", "status": "connected", "message": "Reconnected to agent"}))
+    else:
+        await websocket.send_text(json.dumps({"type": "status", "status": "waiting", "message": "Waiting for agent"}))
     try:
         await _bridge_session(session, websocket, from_browser=True)
     except (WebSocketDisconnect, RuntimeError):
         pass
-    finally:
-        await terminal_hub.close(session_id, reason="browser_disconnected")
+    # Session is kept alive so browser can reconnect after a page refresh.
+    # Only agent disconnect or TTL expiry will close the session.
 
 
 @router.websocket("/agent/terminal/{session_id}")
@@ -155,11 +158,13 @@ async def agent_terminal_ws(websocket: WebSocket, session_id: str):
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
 
+    session.agent_connected = True
     await session.agent_to_browser.put(json.dumps({"type": "status", "status": "connected", "message": "Agent connected"}))
     try:
         await _bridge_session(session, websocket, from_browser=False)
     except (WebSocketDisconnect, RuntimeError):
         pass
     finally:
+        session.agent_connected = False
         await session.agent_to_browser.put(json.dumps({"type": "status", "status": "closed", "message": "Agent disconnected"}))
         await terminal_hub.close(session_id, reason="agent_disconnected")

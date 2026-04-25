@@ -180,13 +180,22 @@ export default function NodeDetailPage() {
     setTerminalStatus("connecting");
     setTerminalError(null);
     setTerminalOutput("");
+    const sessionKey = `terminal_session_${id}`;
     try {
-      const session = await api.nodes.createTerminalSession(id);
-      const wsUrl = api.terminalWebSocketUrl(session.id);
+      const storedId = sessionStorage.getItem(sessionKey);
+      let sessionId: string;
+      if (storedId) {
+        sessionId = storedId;
+      } else {
+        const session = await api.nodes.createTerminalSession(id);
+        sessionId = session.id;
+        sessionStorage.setItem(sessionKey, sessionId);
+      }
+      const wsUrl = api.terminalWebSocketUrl(sessionId);
       if (!wsUrl) throw new Error("Нет токена доступа");
       const socket = new WebSocket(wsUrl);
       terminalSocketRef.current = socket;
-      socket.onopen = () => setTerminalStatus("waiting");
+      socket.onopen = () => setTerminalStatus("connecting");
       socket.onmessage = (event) => {
         let message: { type: string; status?: typeof terminalStatus; data?: string; message?: string; code?: number };
         try {
@@ -205,15 +214,23 @@ export default function NodeDetailPage() {
         }
         if (message.type === "exit") {
           setTerminalStatus("closed");
+          sessionStorage.removeItem(sessionKey);
           appendTerminalOutput(`\n[${message.message ?? `Shell exited with code ${message.code ?? 0}`}]\n`);
           return;
         }
+        if (message.type === "close") {
+          sessionStorage.removeItem(sessionKey);
+          socket.close();
+          return;
+        }
         if (message.type === "error") {
+          sessionStorage.removeItem(sessionKey);
           setTerminalStatus("error");
           setTerminalError(message.message ?? "Terminal error");
         }
       };
       socket.onerror = () => {
+        sessionStorage.removeItem(sessionKey);
         setTerminalStatus("error");
         setTerminalError("WebSocket connection failed");
       };
@@ -222,12 +239,14 @@ export default function NodeDetailPage() {
         setTerminalStatus((current) => current === "error" ? "error" : "closed");
       };
     } catch (err: unknown) {
+      sessionStorage.removeItem(sessionKey);
       setTerminalStatus("error");
       setTerminalError(err instanceof Error ? err.message : "Не удалось открыть SSH");
     }
   }
 
   function closeTerminal() {
+    sessionStorage.removeItem(`terminal_session_${id}`);
     const socket = terminalSocketRef.current;
     if (socket && socket.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify({ type: "close" }));

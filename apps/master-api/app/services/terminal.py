@@ -19,6 +19,7 @@ class TerminalSession:
     browser_to_agent: asyncio.Queue[str] = field(default_factory=lambda: asyncio.Queue(maxsize=500))
     agent_to_browser: asyncio.Queue[str] = field(default_factory=lambda: asyncio.Queue(maxsize=500))
     closed: bool = False
+    agent_connected: bool = False
 
 
 class TerminalHub:
