@@ -14,4 +14,4 @@ class Event(UUIDMixin, TimestampMixin, Base):
     severity: Mapped[str] = mapped_column(String(16), nullable=False)  # info | warning | critical
     type: Mapped[str] = mapped_column(String(64), nullable=False)
     message: Mapped[str] = mapped_column(Text, nullable=False)
-    metadata: Mapped[dict] = mapped_column(JSONB, default=dict)
+    extra: Mapped[dict] = mapped_column(JSONB, default=dict)

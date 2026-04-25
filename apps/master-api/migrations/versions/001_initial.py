@@ -140,7 +140,7 @@ def upgrade() -> None:
         sa.Column("severity", sa.String(16), nullable=False),
         sa.Column("type", sa.String(64), nullable=False),
         sa.Column("message", sa.Text(), nullable=False),
-        sa.Column("metadata", postgresql.JSONB(), nullable=False, server_default="{}"),
+        sa.Column("extra", postgresql.JSONB(), nullable=False, server_default="{}"),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), index=True),
     )
 

@@ -169,7 +169,7 @@ async def get_node_events(node_id: uuid.UUID, _: CurrentUser, db: DB):
             "severity": e.severity,
             "type": e.type,
             "message": e.message,
-            "metadata": e.metadata,
+            "extra": e.extra,
             "created_at": e.created_at.isoformat(),
         }
         for e in events
@@ -242,7 +242,7 @@ async def update_agent(node_id: uuid.UUID, _: CurrentUser, db: DB):
         severity="info",
         type="agent.update_scheduled",
         message=f"Agent update to {tag_name} ({arch}) scheduled",
-        metadata={"version": tag_name, "arch": arch},
+        extra={"version": tag_name, "arch": arch},
     ))
     await db.commit()
     await db.refresh(task)

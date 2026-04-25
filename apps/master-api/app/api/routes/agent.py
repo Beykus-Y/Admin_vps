@@ -180,7 +180,7 @@ async def snapshot(body: SnapshotRequest, node: AgentNode, db: DB):
                 severity="warning",
                 type="port.new_unexpected",
                 message=f"New port opened: {p.protocol}/{p.port} on {p.listen_ip} (process: {p.process_name})",
-                metadata={"port": p.port, "protocol": p.protocol, "listen_ip": p.listen_ip, "process": p.process_name},
+                extra={"port": p.port, "protocol": p.protocol, "listen_ip": p.listen_ip, "process": p.process_name},
             ))
 
     await db.commit()
