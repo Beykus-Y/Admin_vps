@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
-import { LayoutDashboard, Server, LogOut } from "lucide-react";
+import { LayoutDashboard, Server, LogOut, ArrowUpCircle, Loader2 } from "lucide-react";
 import clsx from "clsx";
 import { api, VersionInfo } from "@/lib/api";
 
@@ -10,6 +10,8 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   const [versionInfo, setVersionInfo] = useState<VersionInfo | null>(null);
+  const [masterUpdateLoading, setMasterUpdateLoading] = useState(false);
+  const [masterUpdateMsg, setMasterUpdateMsg] = useState<string | null>(null);
 
   useEffect(() => {
     api.version().then(setVersionInfo).catch(() => null);
@@ -18,6 +20,20 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   function logout() {
     localStorage.removeItem("token");
     router.push("/login");
+  }
+
+  async function updateMaster() {
+    if (!window.confirm("Schedule master update now?")) return;
+    setMasterUpdateLoading(true);
+    setMasterUpdateMsg(null);
+    try {
+      const task = await api.master.update();
+      setMasterUpdateMsg(`task ${task.id.slice(0, 8)} created`);
+    } catch (err: unknown) {
+      setMasterUpdateMsg(err instanceof Error ? err.message : "update failed");
+    } finally {
+      setMasterUpdateLoading(false);
+    }
   }
 
   const nav = [
@@ -63,6 +79,18 @@ export default function Layout({ children }: { children: React.ReactNode }) {
               )}
             </div>
           )}
+          <div className="px-3 pb-2">
+            <button
+              onClick={updateMaster}
+              disabled={masterUpdateLoading}
+              className="flex items-center gap-2 px-3 py-2 rounded text-sm text-[#64748b] hover:text-[#0ea5e9] hover:bg-[#0ea5e9]/10 w-full transition-colors disabled:opacity-50"
+              title="Pull latest master images and restart the master stack through the master agent"
+            >
+              {masterUpdateLoading ? <Loader2 size={15} className="animate-spin" /> : <ArrowUpCircle size={15} />}
+              Update Master
+            </button>
+            {masterUpdateMsg && <div className="px-3 pt-1 text-[10px] text-[#64748b] break-words">{masterUpdateMsg}</div>}
+          </div>
           <div className="p-3 pt-1">
             <button
               onClick={logout}

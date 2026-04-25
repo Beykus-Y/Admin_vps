@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/filincontrol/agent/internal/client"
@@ -20,6 +21,12 @@ import (
 )
 
 var version = "0.1.0"
+
+var publicIPCache = struct {
+	sync.Mutex
+	value     string
+	fetchedAt time.Time
+}{}
 
 func main() {
 	configPath := flag.String("config", "/etc/filin-agent/config.yml", "path to config file")
@@ -67,7 +74,7 @@ func main() {
 
 		case <-taskTick.C:
 			go func() {
-				ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 				defer cancel()
 				processTasks(ctx, c)
 			}()
@@ -82,6 +89,12 @@ func sendSnapshot(ctx context.Context, c *client.Client) {
 		msg := fmt.Sprintf("System inventory unavailable: %v", err)
 		log.Print(msg)
 		inventoryErrors = append(inventoryErrors, msg)
+	}
+	if publicIP := detectPublicIP(ctx); publicIP != "" {
+		if system == nil {
+			system = &client.SnapshotSystem{LocalIPs: []string{}}
+		}
+		system.PublicIP = publicIP
 	}
 
 	metrics, err := collector.CollectMetrics(ctx)
@@ -228,6 +241,14 @@ func runEnroll(masterURL, enrollToken, configPath string) {
 }
 
 func detectPublicIP(ctx context.Context) string {
+	publicIPCache.Lock()
+	if publicIPCache.value != "" && time.Since(publicIPCache.fetchedAt) < 10*time.Minute {
+		value := publicIPCache.value
+		publicIPCache.Unlock()
+		return value
+	}
+	publicIPCache.Unlock()
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.ipify.org", nil)
 	if err != nil {
 		return ""
@@ -245,7 +266,14 @@ func detectPublicIP(ctx context.Context) string {
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(string(body))
+	value := strings.TrimSpace(string(body))
+	if value != "" {
+		publicIPCache.Lock()
+		publicIPCache.value = value
+		publicIPCache.fetchedAt = time.Now()
+		publicIPCache.Unlock()
+	}
+	return value
 }
 
 func detectOS() string {

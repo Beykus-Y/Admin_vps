@@ -20,6 +20,7 @@ ALLOWED_TASK_TYPES = {
     "docker.compose.down",
     "system.reboot",
     "agent.update",
+    "master.update",
 }
 
 

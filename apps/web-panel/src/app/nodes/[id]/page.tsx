@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { useRouter, useParams } from "next/navigation";
 import Layout from "@/components/Layout";
 import { api, Node, Container, Port, Task, NodeEvent, VersionInfo, NodeMetric, isAgentOutdated } from "@/lib/api";
-import { Circle, RefreshCw, Square, Play, CheckCircle, ArrowUpCircle, Loader2, AlertTriangle } from "lucide-react";
+import { Circle, RefreshCw, Square, Play, CheckCircle, ArrowUpCircle, Loader2, AlertTriangle, Trash2 } from "lucide-react";
 
 type Tab = "overview" | "docker" | "ports" | "tasks" | "events";
 
@@ -48,6 +48,13 @@ function formatBytes(bytes: number | null) {
     idx += 1;
   }
   return `${value.toFixed(idx === 0 ? 0 : 1)}${units[idx]}`;
+}
+
+function formatLocalIPs(ips: string[] | null | undefined) {
+  if (!ips || ips.length === 0) return null;
+  const visible = ips.slice(0, 6);
+  const suffix = ips.length > visible.length ? ` +${ips.length - visible.length} more` : "";
+  return `${visible.join(", ")}${suffix}`;
 }
 
 export default function NodeDetailPage() {
@@ -113,12 +120,21 @@ export default function NodeDetailPage() {
     }
   }
 
+  async function deleteNode() {
+    if (!node) return;
+    const confirmed = window.confirm(`Delete node "${node.name}"? This removes its inventory, tasks, and events from the master.`);
+    if (!confirmed) return;
+    await api.nodes.delete(id);
+    router.push("/nodes");
+  }
+
   if (!node) return <Layout><div className="p-8 text-[#64748b]">Loading...</div></Layout>;
 
   const tabs: Tab[] = ["overview", "docker", "ports", "tasks", "events"];
   const runningContainers = containers.filter((c) => c.state === "running").length;
   const openPorts = ports.filter((p) => p.status === "open").length;
   const unexpectedOpenPorts = ports.filter((p) => p.status === "open" && !p.is_expected).length;
+  const isMaster = node.tags?.includes("master") || node.group_name === "master";
 
   return (
     <Layout>
@@ -126,6 +142,7 @@ export default function NodeDetailPage() {
         <div className="flex items-center gap-3 mb-2 flex-wrap">
           <StatusDot status={node.status} />
           <h1 className="text-xl font-bold text-white">{node.name}</h1>
+          {isMaster && <span className="text-[10px] uppercase tracking-wide bg-[#0ea5e9]/10 text-[#0ea5e9] border border-[#0ea5e9]/20 px-1.5 py-0.5 rounded">master</span>}
           {node.public_ip && <span className="text-[#64748b] text-sm">{node.public_ip}</span>}
           {node.agent_version && (() => {
             const outdated = isAgentOutdated(node.agent_version, versionInfo?.latest_agent_version ?? null);
@@ -163,6 +180,14 @@ export default function NodeDetailPage() {
               Update Agent
             </button>
           )}
+          <button
+            onClick={deleteNode}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium bg-red-500/10 text-red-400 hover:bg-red-500/20 border border-red-500/20 transition-colors"
+            title="Delete node from master"
+          >
+            <Trash2 size={13} />
+            Delete
+          </button>
         </div>
         {updateMsg && (
           <div className={`mb-4 text-xs px-3 py-2 rounded border ${
@@ -191,13 +216,14 @@ export default function NodeDetailPage() {
               <h3 className="text-xs font-semibold text-[#64748b] uppercase tracking-wider mb-3">System Info</h3>
               {[
                 ["Hostname", node.hostname],
+                ["Public IP", node.public_ip],
                 ["OS", node.os],
                 ["Arch", node.arch],
                 ["Kernel", node.kernel],
                 ["CPU", node.cpu_model],
                 ["CPU Cores", node.cpu_cores],
                 ["Uptime", formatUptime(node.uptime_seconds)],
-                ["Local IPs", node.local_ips?.length ? node.local_ips.join(", ") : null],
+                ["Local IPs", formatLocalIPs(node.local_ips)],
                 ["Provider", node.provider],
                 ["Location", node.location],
                 ["Agent Version", node.agent_version],

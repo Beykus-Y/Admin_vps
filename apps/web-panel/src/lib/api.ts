@@ -36,6 +36,9 @@ export const api = {
 
   overview: () => request<Overview>("/overview"),
   version: () => request<VersionInfo>("/version"),
+  master: {
+    update: () => request<Task>("/master/update", { method: "POST" }),
+  },
 
   nodes: {
     list: () => request<Node[]>("/nodes"),

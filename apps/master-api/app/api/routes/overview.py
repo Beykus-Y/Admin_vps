@@ -6,6 +6,7 @@ from sqlalchemy import select
 from app.api.deps import DB, CurrentUser
 from app.core.config import settings
 from app.db.models import DockerContainer, Event, Node, OpenPort
+from app.services.events import is_noisy_port_event
 
 router = APIRouter(prefix="/overview", tags=["overview"])
 
@@ -35,9 +36,9 @@ async def get_overview(_: CurrentUser, db: DB):
         select(Event)
         .where(Event.severity.in_(["warning", "critical"]))
         .order_by(Event.created_at.desc())
-        .limit(20)
+        .limit(100)
     )
-    recent_events = events_result.scalars().all()
+    recent_events = [e for e in events_result.scalars().all() if not is_noisy_port_event(e)][:20]
 
     return {
         "nodes": {"total": total, "online": online, "offline": offline, "pending": pending},

@@ -15,6 +15,7 @@ The script will:
 4. Pull images from ghcr.io, run migrations, start services
 5. Create admin user
 6. Register `filincontrol.service` (auto-start on reboot)
+7. Install the local agent on the master VPS so the master appears as a node
 
 ---
 
@@ -74,6 +75,11 @@ To let the master schedule updates for outdated online agents automatically, set
 ```env
 AGENT_AUTO_UPDATE_ENABLED=true
 ```
+
+## Update Master (1-click)
+
+Open the panel → click **Update Master** in the sidebar.
+This requires the master VPS to have its local agent installed and marked with the `master` tag. New master installs do this automatically.
 
 ---
 

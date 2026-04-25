@@ -29,18 +29,27 @@ function AgentVersionBadge({ version, latestVersion }: { version: string | null;
   );
 }
 
+function primaryNodeIP(node: Node) {
+  return node.public_ip || node.local_ips?.find((ip) => !ip.includes(":")) || node.local_ips?.[0] || null;
+}
+
 function NodeCard({ node, latestAgentVersion }: { node: Node; latestAgentVersion: string | null }) {
+  const ip = primaryNodeIP(node);
+  const isMaster = node.tags?.includes("master") || node.group_name === "master";
   return (
     <Link href={`/nodes/${node.id}`} className="block bg-[#1a1d27] border border-[#2a2d3e] rounded-lg p-5 hover:border-[#0ea5e9]/40 transition-colors">
       <div className="flex items-center justify-between mb-3">
-        <span className="font-semibold text-white text-sm">{node.name}</span>
+        <span className="font-semibold text-white text-sm flex items-center gap-2">
+          {node.name}
+          {isMaster && <span className="text-[10px] uppercase tracking-wide bg-[#0ea5e9]/10 text-[#0ea5e9] border border-[#0ea5e9]/20 px-1.5 py-0.5 rounded">master</span>}
+        </span>
         <div className="flex items-center gap-1.5">
           <StatusDot status={node.status} />
           <span className="text-xs text-[#64748b] capitalize">{node.status}</span>
         </div>
       </div>
       <div className="space-y-1 text-xs text-[#64748b]">
-        {node.public_ip && <div>IP: <span className="text-white">{node.public_ip}</span></div>}
+        {ip && <div>IP: <span className="text-white">{ip}</span>{!node.public_ip && <span className="text-[#475569]"> local</span>}</div>}
         {node.os && <div>OS: <span className="text-white">{node.os}</span></div>}
         {node.hostname && <div>Host: <span className="text-white">{node.hostname}</span></div>}
         {node.location && <div>Location: <span className="text-white">{node.location}</span></div>}

@@ -16,6 +16,7 @@ from app.schemas.agent import (
     TaskOut,
     TaskResultRequest,
 )
+from app.services.events import is_noisy_dynamic_udp_port
 
 router = APIRouter(prefix="/agent", tags=["agent"])
 
@@ -184,6 +185,7 @@ async def snapshot(body: SnapshotRequest, node: AgentNode, db: DB):
                 existing_ports[key].user_name = p.user_name
                 existing_ports[key].container_name = p.container_name
             else:
+                should_alert = not is_noisy_dynamic_udp_port(p.protocol, p.port, p.process_name)
                 new_port = OpenPort(
                     node_id=node.id,
                     protocol=p.protocol,
@@ -196,13 +198,14 @@ async def snapshot(body: SnapshotRequest, node: AgentNode, db: DB):
                     is_expected=False,
                 )
                 db.add(new_port)
-                db.add(Event(
-                    node_id=node.id,
-                    severity="warning",
-                    type="port.new_unexpected",
-                    message=f"New port opened: {p.protocol}/{p.port} on {p.listen_ip} (process: {p.process_name})",
-                    extra={"port": p.port, "protocol": p.protocol, "listen_ip": p.listen_ip, "process": p.process_name},
-                ))
+                if should_alert:
+                    db.add(Event(
+                        node_id=node.id,
+                        severity="warning",
+                        type="port.new_unexpected",
+                        message=f"New port opened: {p.protocol}/{p.port} on {p.listen_ip} (process: {p.process_name})",
+                        extra={"port": p.port, "protocol": p.protocol, "listen_ip": p.listen_ip, "process": p.process_name},
+                    ))
 
     for message in body.errors:
         event_exists = await db.execute(

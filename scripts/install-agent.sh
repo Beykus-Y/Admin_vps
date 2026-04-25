@@ -242,7 +242,11 @@ EOF
 
 systemctl daemon-reload
 systemctl enable filin-agent
-systemctl start filin-agent
+if systemctl is-active --quiet filin-agent; then
+  systemctl restart filin-agent
+else
+  systemctl start filin-agent
+fi
 
 echo "[7/7] Service started"
 echo ""

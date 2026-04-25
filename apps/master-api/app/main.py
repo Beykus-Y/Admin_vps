@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import agent, auth, nodes, overview, version
+from app.api.routes import agent, auth, master, nodes, overview, version
 from app.core.config import settings
 from app.services.node_monitor import run_monitor
 
@@ -36,6 +36,7 @@ app.include_router(nodes.router, prefix="/api")
 app.include_router(overview.router, prefix="/api")
 app.include_router(agent.router, prefix="/api")
 app.include_router(version.router, prefix="/api")
+app.include_router(master.router, prefix="/api")
 
 
 @app.get("/health")

@@ -56,6 +56,10 @@ func collectLocalIPs() []string {
 	}
 	result := []string{}
 	for _, iface := range interfaces {
+		name := strings.ToLower(iface.Name)
+		if strings.HasPrefix(name, "docker") || strings.HasPrefix(name, "br-") || strings.HasPrefix(name, "veth") || strings.HasPrefix(name, "cni") || strings.HasPrefix(name, "flannel") {
+			continue
+		}
 		if iface.Flags&stdnet.FlagUp == 0 || iface.Flags&stdnet.FlagLoopback != 0 {
 			continue
 		}
@@ -65,10 +69,13 @@ func collectLocalIPs() []string {
 		}
 		for _, address := range addresses {
 			ip, _, err := stdnet.ParseCIDR(address.String())
-			if err != nil || ip == nil || ip.IsLoopback() {
+			if err != nil || ip == nil || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsMulticast() {
 				continue
 			}
 			result = append(result, ip.String())
+			if len(result) >= 8 {
+				return result
+			}
 		}
 	}
 	return result

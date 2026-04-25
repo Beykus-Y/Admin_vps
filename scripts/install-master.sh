@@ -432,6 +432,98 @@ systemctl daemon-reload
 systemctl enable filincontrol
 ok "filincontrol.service enabled (auto-start on reboot)"
 
+# ── Local agent on master VPS ─────────────────────────────────────────────────
+create_master_agent_token_direct() {
+  "${DC[@]}" exec -T \
+  -e FC_MASTER_PUBLIC_IP="${PUBLIC_IPV4:-}" \
+  -e FC_MASTER_LOCATION="${HOST}" \
+  api python -c '
+import asyncio
+import os
+from datetime import UTC, datetime, timedelta
+
+from sqlalchemy import select
+
+from app.core.config import settings
+from app.core.security import generate_enroll_token, hash_token
+from app.db.base import AsyncSessionLocal
+from app.db.models import Node, NodeEnrollToken
+
+
+async def main() -> None:
+    async with AsyncSessionLocal() as db:
+        public_ip = os.environ.get("FC_MASTER_PUBLIC_IP") or None
+        result = await db.execute(select(Node))
+        nodes = result.scalars().all()
+        node = next((n for n in nodes if n.group_name == "master"), None)
+        if node is None and public_ip:
+            node = next((n for n in nodes if n.public_ip == public_ip), None)
+        if node is None:
+            node = Node(
+                name="FilinControl Master",
+                provider="Self",
+                location=os.environ.get("FC_MASTER_LOCATION") or None,
+                group_name="master",
+                tags=["master", "self"],
+                public_ip=public_ip,
+                status="pending",
+            )
+            db.add(node)
+            await db.flush()
+        else:
+            tags = list(node.tags or [])
+            for tag in ["master", "self"]:
+                if tag not in tags:
+                    tags.append(tag)
+            node.tags = tags
+            node.group_name = "master"
+
+        raw_token = generate_enroll_token()
+        db.add(NodeEnrollToken(
+            node_id=node.id,
+            token_hash=hash_token(raw_token),
+            expires_at=datetime.now(UTC) + timedelta(minutes=settings.enroll_token_expire_minutes),
+        ))
+        await db.commit()
+        print(raw_token)
+
+
+asyncio.run(main())
+' </dev/null
+}
+
+install_master_agent() {
+  local master_agent_url token exit_code
+  if [[ "${USE_CADDY_CONTAINER}" == false ]]; then
+    master_agent_url="http://127.0.0.1:8000"
+  elif [[ -n "${IP_FALLBACK_URL}" ]]; then
+    master_agent_url="${IP_FALLBACK_URL}"
+  else
+    master_agent_url="$([ "${USE_TLS}" == true ] && echo "https" || echo "http")://${HOST}"
+  fi
+
+  info "Installing local agent on the master VPS..."
+  set +e
+  token="$(create_master_agent_token_direct 2>/tmp/filin-master-agent-token.err)"
+  exit_code=$?
+  set -e
+  if [[ ${exit_code} -ne 0 || -z "${token}" ]]; then
+    warn "Could not create master self-agent enroll token — skipping local agent install"
+    [[ -s /tmp/filin-master-agent-token.err ]] && warn "$(cat /tmp/filin-master-agent-token.err)"
+    return
+  fi
+
+  if curl -fsSL "${RAW_BASE}/scripts/install-agent.sh" | bash -s -- \
+    --master-url "${master_agent_url}" \
+    --enroll-token "${token}"; then
+    ok "Local master agent installed"
+  else
+    warn "Local master agent install failed — create a master node manually and run its agent install command"
+  fi
+}
+
+install_master_agent
+
 # ── Show external proxy config snippet ───────────────────────────────────────
 if [[ "$USE_CADDY_CONTAINER" == false ]]; then
   echo ""

@@ -22,6 +22,8 @@ func Execute(ctx context.Context, task agentclient.Task) (map[string]any, error)
 		return serviceRestart(ctx, task.Payload)
 	case "agent.update":
 		return selfUpdate(ctx, task.Payload)
+	case "master.update":
+		return masterUpdate(ctx, task.Payload)
 	default:
 		return nil, fmt.Errorf("unknown task type: %s", task.Type)
 	}

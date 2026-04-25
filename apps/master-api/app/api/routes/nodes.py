@@ -12,6 +12,7 @@ from app.db.models import DockerContainer, Event, Node, NodeEnrollToken, NodeMet
 from app.schemas.node import NodeCreate, NodeEnrollTokenOut, NodeMetricOut, NodeOut
 from app.schemas.task import ALLOWED_TASK_TYPES, TaskCreate, TaskOutFull
 from app.services.agent_releases import build_agent_update_payload, is_agent_outdated
+from app.services.events import is_noisy_port_event
 
 router = APIRouter(prefix="/nodes", tags=["nodes"])
 
@@ -195,9 +196,9 @@ async def create_task(node_id: uuid.UUID, body: TaskCreate, _: CurrentUser, db: 
 @router.get("/{node_id}/events")
 async def get_node_events(node_id: uuid.UUID, _: CurrentUser, db: DB):
     result = await db.execute(
-        select(Event).where(Event.node_id == node_id).order_by(Event.created_at.desc()).limit(100)
+        select(Event).where(Event.node_id == node_id).order_by(Event.created_at.desc()).limit(300)
     )
-    events = result.scalars().all()
+    events = [e for e in result.scalars().all() if not is_noisy_port_event(e)][:100]
     return [
         {
             "id": str(e.id),
