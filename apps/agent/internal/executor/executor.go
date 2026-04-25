@@ -25,6 +25,7 @@ var supportedTaskTypes = []string{
 	"system.reboot",
 	"agent.update",
 	"master.update",
+	"terminal.session",
 }
 
 func Capabilities() []string {

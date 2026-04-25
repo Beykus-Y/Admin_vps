@@ -36,7 +36,14 @@ async def get_agent_node(
     credentials: Annotated[HTTPAuthorizationCredentials, Depends(bearer_scheme)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> Node:
-    token_hash = hash_token(credentials.credentials)
+    node = await get_agent_node_by_token(credentials.credentials, db)
+    if not node:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid agent token")
+    return node
+
+
+async def get_agent_node_by_token(token: str, db: AsyncSession) -> Node | None:
+    token_hash = hash_token(token)
     result = await db.execute(
         select(NodeCredential).where(
             NodeCredential.token_hash == token_hash,
@@ -45,13 +52,10 @@ async def get_agent_node(
     )
     cred = result.scalar_one_or_none()
     if not cred:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid agent token")
+        return None
 
     node_result = await db.execute(select(Node).where(Node.id == cred.node_id))
-    node = node_result.scalar_one_or_none()
-    if not node:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Node not found")
-    return node
+    return node_result.scalar_one_or_none()
 
 
 def require_role(min_role: str):

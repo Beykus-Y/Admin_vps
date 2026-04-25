@@ -10,6 +10,26 @@ function getToken(): string | null {
   return localStorage.getItem("token");
 }
 
+function apiOrigin(): string {
+  if (BASE_URL) return BASE_URL;
+  if (typeof window === "undefined") return "";
+  return window.location.origin;
+}
+
+function websocketUrl(path: string, params: Record<string, string | number | boolean | undefined | null> = {}): string | null {
+  const token = getToken();
+  if (!token) return null;
+  const origin = apiOrigin();
+  if (!origin) return null;
+  const url = new URL(`/api${path}`, origin);
+  Object.entries({ ...params, token }).forEach(([key, value]) => {
+    if (value == null || value === "") return;
+    url.searchParams.set(key, String(value));
+  });
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  return url.toString();
+}
+
 function buildQuery(params: Record<string, string | number | boolean | undefined | null>): string {
   const search = new URLSearchParams();
   Object.entries(params).forEach(([key, value]) => {
@@ -145,6 +165,12 @@ export interface EnrollToken {
   install_command: string;
   enroll_token: string;
   expires_at: string;
+}
+
+export interface TerminalSession {
+  id: string;
+  node_id: string;
+  created_at: string;
 }
 
 export interface NodeEvent {
@@ -343,6 +369,8 @@ export const api = {
       request<Task>(`/nodes/${id}/update-agent`, { method: "POST" }),
     updateOutdatedAgents: () =>
       request<Task[]>("/nodes/update-agents", { method: "POST" }),
+    createTerminalSession: (id: string) =>
+      request<TerminalSession>(`/nodes/${id}/terminal/sessions`, { method: "POST", body: JSON.stringify({}) }),
   },
   version: async () => {
     const now = Date.now();
@@ -367,8 +395,14 @@ export const api = {
   },
   streamUrl: () => {
     const token = getToken();
-    if (!token) return null;
-    return `${BASE_URL}/api/stream?token=${encodeURIComponent(token)}`;
+    const origin = apiOrigin();
+    if (!token || !origin) return null;
+    const url = new URL("/api/stream", origin);
+    url.searchParams.set("token", token);
+    return url.toString();
+  },
+  terminalWebSocketUrl: (sessionId: string) => {
+    return websocketUrl(`/terminal/sessions/${sessionId}`);
   },
 } as const;
 

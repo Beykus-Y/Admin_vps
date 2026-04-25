@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -22,6 +23,28 @@ func New(masterURL, agentToken string) *Client {
 		agentToken: agentToken,
 		http:       &http.Client{Timeout: 30 * time.Second},
 	}
+}
+
+func (c *Client) AgentToken() string {
+	return c.agentToken
+}
+
+func (c *Client) WebSocketURL(path string) (string, error) {
+	parsed, err := url.Parse(c.masterURL)
+	if err != nil {
+		return "", err
+	}
+	switch parsed.Scheme {
+	case "https":
+		parsed.Scheme = "wss"
+	case "http":
+		parsed.Scheme = "ws"
+	default:
+		return "", fmt.Errorf("unsupported master URL scheme: %s", parsed.Scheme)
+	}
+	parsed.Path = "/api" + path
+	parsed.RawQuery = ""
+	return parsed.String(), nil
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body any) ([]byte, int, error) {
@@ -54,12 +77,12 @@ func (c *Client) do(ctx context.Context, method, path string, body any) ([]byte,
 }
 
 type EnrollRequest struct {
-	EnrollToken  string `json:"enroll_token"`
-	Hostname     string `json:"hostname"`
-	PublicIP     string `json:"public_ip,omitempty"`
-	OS           string `json:"os,omitempty"`
-	Arch         string `json:"arch,omitempty"`
-	AgentVersion string `json:"agent_version"`
+	EnrollToken  string   `json:"enroll_token"`
+	Hostname     string   `json:"hostname"`
+	PublicIP     string   `json:"public_ip,omitempty"`
+	OS           string   `json:"os,omitempty"`
+	Arch         string   `json:"arch,omitempty"`
+	AgentVersion string   `json:"agent_version"`
 	Capabilities []string `json:"capabilities,omitempty"`
 }
 
@@ -85,8 +108,8 @@ func (c *Client) Enroll(ctx context.Context, req EnrollRequest) (*EnrollResponse
 }
 
 type HeartbeatRequest struct {
-	AgentVersion string `json:"agent_version"`
-	Status       string `json:"status"`
+	AgentVersion string   `json:"agent_version"`
+	Status       string   `json:"status"`
 	Capabilities []string `json:"capabilities,omitempty"`
 }
 
@@ -157,14 +180,14 @@ type SnapshotPort struct {
 }
 
 type SnapshotRequest struct {
-	System              *SnapshotSystem      `json:"system,omitempty"`
-	Metrics             *SnapshotMetrics     `json:"metrics,omitempty"`
-	Containers          []SnapshotContainer  `json:"containers"`
-	Ports               []SnapshotPort       `json:"ports"`
-	ContainersCollected bool                 `json:"containers_collected"`
-	PortsCollected      bool                 `json:"ports_collected"`
-	Errors              []string             `json:"errors"`
-	Capabilities        []string             `json:"capabilities,omitempty"`
+	System              *SnapshotSystem     `json:"system,omitempty"`
+	Metrics             *SnapshotMetrics    `json:"metrics,omitempty"`
+	Containers          []SnapshotContainer `json:"containers"`
+	Ports               []SnapshotPort      `json:"ports"`
+	ContainersCollected bool                `json:"containers_collected"`
+	PortsCollected      bool                `json:"ports_collected"`
+	Errors              []string            `json:"errors"`
+	Capabilities        []string            `json:"capabilities,omitempty"`
 }
 
 func (c *Client) Snapshot(ctx context.Context, snap SnapshotRequest) error {

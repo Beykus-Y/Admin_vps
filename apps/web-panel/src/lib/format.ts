@@ -116,6 +116,8 @@ export function taskTypeLabel(type: string): string {
     "docker.compose.down": "docker compose down",
     "system.reboot": "Перезагрузка ноды",
     "master.update": "Обновление мастера",
+    "terminal.session": "Browser SSH",
+    "terminal.open": "Открытие SSH",
   }[type] ?? type;
 }
 

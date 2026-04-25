@@ -18,6 +18,7 @@ import (
 	"github.com/filincontrol/agent/internal/collector"
 	"github.com/filincontrol/agent/internal/config"
 	"github.com/filincontrol/agent/internal/executor"
+	"github.com/filincontrol/agent/internal/terminal"
 )
 
 var version = "dev"
@@ -189,6 +190,28 @@ func processTasks(ctx context.Context, c *client.Client) {
 	}
 	for _, task := range tasks {
 		log.Printf("executing task %s type=%s", task.ID, task.Type)
+		if task.Type == "terminal.open" {
+			sessionID, _ := task.Payload["session_id"].(string)
+			shell, _ := task.Payload["shell"].(string)
+			if sessionID == "" {
+				if err := c.SubmitTaskResult(ctx, task.ID, client.TaskResultRequest{Status: "failed", Error: "missing terminal session_id"}); err != nil {
+					log.Printf("submit task result: %v", err)
+				}
+				continue
+			}
+			go func() {
+				if err := terminal.StartSession(context.Background(), c, sessionID, shell); err != nil {
+					log.Printf("terminal session %s: %v", sessionID, err)
+				}
+			}()
+			if err := c.SubmitTaskResult(ctx, task.ID, client.TaskResultRequest{
+				Status: "success",
+				Result: map[string]any{"message": "terminal session connecting", "session_id": sessionID},
+			}); err != nil {
+				log.Printf("submit task result: %v", err)
+			}
+			continue
+		}
 		result, execErr := executor.Execute(ctx, task)
 		var req client.TaskResultRequest
 		if execErr != nil {
