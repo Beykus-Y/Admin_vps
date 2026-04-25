@@ -1,4 +1,5 @@
 panel.example.com {
+    redir /install/agent.sh https://raw.githubusercontent.com/Beykus-Y/Admin_vps/main/scripts/install-agent.sh 302
     reverse_proxy /api/* api:8000
     reverse_proxy web:3000
 }

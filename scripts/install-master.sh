@@ -191,6 +191,7 @@ if [[ "$USE_CADDY_CONTAINER" == true ]]; then
     PUBLIC_IPV4="$(detect_public_ipv4)"
     cat > "${CADDYFILE}" <<EOF
 ${HOST} {
+    redir /install/agent.sh ${RAW_BASE}/scripts/install-agent.sh 302
     reverse_proxy /api/* api:8000
     reverse_proxy web:3000
 }
@@ -199,6 +200,7 @@ EOF
       cat >> "${CADDYFILE}" <<EOF
 
 http://${PUBLIC_IPV4} {
+    redir /install/agent.sh ${RAW_BASE}/scripts/install-agent.sh 302
     reverse_proxy /api/* api:8000
     reverse_proxy web:3000
 }
@@ -210,6 +212,7 @@ EOF
   else
     cat > "${CADDYFILE}" <<EOF
 :80 {
+    redir /install/agent.sh ${RAW_BASE}/scripts/install-agent.sh 302
     reverse_proxy /api/* api:8000
     reverse_proxy web:3000
 }

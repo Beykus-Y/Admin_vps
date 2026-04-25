@@ -1,8 +1,9 @@
 import uuid
+import shlex
 from datetime import UTC, datetime, timedelta
 
 import httpx
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import select
 
 from app.api.deps import DB, CurrentUser
@@ -15,6 +16,17 @@ from app.schemas.task import ALLOWED_TASK_TYPES, TaskCreate, TaskOutFull
 router = APIRouter(prefix="/nodes", tags=["nodes"])
 
 GITHUB_REPO = "Beykus-Y/Admin_vps"
+AGENT_INSTALLER_URL = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/scripts/install-agent.sh"
+
+
+def external_base_url(request: Request) -> str:
+    proto = request.headers.get("x-forwarded-proto", request.url.scheme).split(",")[0].strip()
+    host = (
+        request.headers.get("x-forwarded-host")
+        or request.headers.get("host")
+        or request.url.netloc
+    )
+    return f"{proto}://{host}".rstrip("/")
 
 
 @router.post("", response_model=NodeOut, status_code=201)
@@ -59,7 +71,7 @@ async def delete_node(node_id: uuid.UUID, _: CurrentUser, db: DB):
 
 
 @router.post("/{node_id}/enroll-token", response_model=NodeEnrollTokenOut)
-async def create_enroll_token(node_id: uuid.UUID, _: CurrentUser, db: DB):
+async def create_enroll_token(node_id: uuid.UUID, request: Request, _: CurrentUser, db: DB):
     result = await db.execute(select(Node).where(Node.id == node_id))
     node = result.scalar_one_or_none()
     if not node:
@@ -71,10 +83,11 @@ async def create_enroll_token(node_id: uuid.UUID, _: CurrentUser, db: DB):
     db.add(enroll)
     await db.commit()
 
+    master_url = external_base_url(request)
     install_cmd = (
-        f'curl -fsSL https://panel.example.com/install/agent.sh | sudo bash -s -- '
-        f'--master-url "https://panel.example.com" '
-        f'--enroll-token "{raw_token}"'
+        f"curl -fsSL {shlex.quote(AGENT_INSTALLER_URL)} | sudo bash -s -- "
+        f"--master-url {shlex.quote(master_url)} "
+        f"--enroll-token {shlex.quote(raw_token)}"
     )
     return NodeEnrollTokenOut(install_command=install_cmd, enroll_token=raw_token, expires_at=expires_at)
 
