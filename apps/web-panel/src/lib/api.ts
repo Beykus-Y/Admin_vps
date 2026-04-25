@@ -1,4 +1,9 @@
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL || "";
+const VERSION_CACHE_TTL_MS = 60_000;
+
+let cachedVersionInfo: VersionInfo | null = null;
+let cachedVersionInfoAt = 0;
+let versionRequestInFlight: Promise<VersionInfo> | null = null;
 
 function getToken(): string | null {
   if (typeof window === "undefined") return null;
@@ -251,6 +256,16 @@ export interface InventorySnapshot {
   };
 }
 
+export interface NodeDetails {
+  node: Node;
+  containers: Container[];
+  ports: Port[];
+  metrics: NodeMetric | null;
+  history: NodeMetric[];
+  tasks: Task[];
+  events: NodeEvent[];
+}
+
 export const api = {
   login: (username: string, password: string) =>
     request<TokenResponse>("/auth/login", {
@@ -269,7 +284,6 @@ export const api = {
   },
 
   overview: () => request<Overview>("/overview"),
-  version: () => request<VersionInfo>("/version"),
   inventory: {
     get: () => request<InventorySnapshot>("/inventory"),
   },
@@ -308,6 +322,8 @@ export const api = {
   nodes: {
     list: () => request<Node[]>("/nodes"),
     get: (id: string) => request<Node>(`/nodes/${id}`),
+    details: (id: string, range = "24h", points = 48) =>
+      request<NodeDetails>(`/nodes/${id}/details${buildQuery({ range, points })}`),
     create: (data: { name: string; provider?: string; location?: string; group_name?: string; tags?: string[] }) =>
       request<Node>("/nodes", { method: "POST", body: JSON.stringify(data) }),
     delete: (id: string) => request<void>(`/nodes/${id}`, { method: "DELETE" }),
@@ -328,12 +344,33 @@ export const api = {
     updateOutdatedAgents: () =>
       request<Task[]>("/nodes/update-agents", { method: "POST" }),
   },
+  version: async () => {
+    const now = Date.now();
+    if (cachedVersionInfo && (now - cachedVersionInfoAt) < VERSION_CACHE_TTL_MS) {
+      return cachedVersionInfo;
+    }
+    if (versionRequestInFlight) {
+      return versionRequestInFlight;
+    }
+    versionRequestInFlight = request<VersionInfo>("/version")
+      .then((versionInfo) => {
+        cachedVersionInfo = versionInfo;
+        cachedVersionInfoAt = Date.now();
+        versionRequestInFlight = null;
+        return versionInfo;
+      })
+      .catch((error) => {
+        versionRequestInFlight = null;
+        throw error;
+      });
+    return versionRequestInFlight;
+  },
   streamUrl: () => {
     const token = getToken();
     if (!token) return null;
     return `${BASE_URL}/api/stream?token=${encodeURIComponent(token)}`;
   },
-};
+} as const;
 
 /** Returns true if latestVersion is strictly newer than currentVersion (semver-ish). */
 export function isAgentOutdated(current: string | null, latest: string | null): boolean {

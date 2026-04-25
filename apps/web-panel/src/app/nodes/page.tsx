@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AlertTriangle, ArrowUpCircle, Copy, Loader2, Plus, X } from "lucide-react";
 import Layout from "@/components/Layout";
-import { api, EnrollToken, isAgentOutdated, Node, VersionInfo } from "@/lib/api";
+import { api, EnrollToken, isAgentOutdated, Node } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { formatFullDateTime, formatNumber, formatRelativeTime, statusLabel } from "@/lib/format";
 import { isMasterNode, primaryNodeIP } from "@/lib/inventory";
@@ -188,12 +188,8 @@ export default function NodesPage() {
       return;
     }
     try {
-      const [nodeList, versionInfo] = await Promise.all([
-        api.nodes.list(),
-        api.version().catch(() => null as VersionInfo | null),
-      ]);
+      const nodeList = await api.nodes.list();
       setNodes(nodeList);
-      setLatestAgentVersion(versionInfo?.latest_agent_version ?? null);
     } catch {
       router.push("/login");
     } finally {
@@ -202,6 +198,11 @@ export default function NodesPage() {
   }, [router]);
 
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    api.version()
+      .then((versionInfo) => setLatestAgentVersion(versionInfo.latest_agent_version))
+      .catch(() => null);
+  }, []);
   useLiveReload(Boolean(nodes.length || latestAgentVersion), load);
 
   async function handleUpdateOutdatedAgents() {

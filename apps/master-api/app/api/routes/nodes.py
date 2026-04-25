@@ -1,5 +1,5 @@
-import uuid
 import shlex
+import uuid
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, HTTPException, Request
@@ -15,6 +15,7 @@ from app.schemas.task import ALLOWED_TASK_TYPES, TaskCreate, TaskOutFull
 from app.services.agent_releases import build_agent_update_payload, is_agent_outdated
 from app.services.audit import log_action
 from app.services.events import is_noisy_port_event
+from app.services.inventory import serialize_container, serialize_metric, serialize_node, serialize_port
 from app.services.realtime import publish_event
 
 router = APIRouter(prefix="/nodes", tags=["nodes"])
@@ -47,6 +48,104 @@ def external_base_url(request: Request) -> str:
         or request.url.netloc
     )
     return f"{proto}://{host}".rstrip("/")
+
+
+async def get_node_or_404(node_id: uuid.UUID, db: DB) -> Node:
+    result = await db.execute(select(Node).where(Node.id == node_id))
+    node = result.scalar_one_or_none()
+    if not node:
+        raise HTTPException(status_code=404, detail="Node not found")
+    return node
+
+
+async def load_node_containers(node_id: uuid.UUID, db: DB) -> list[DockerContainer]:
+    result = await db.execute(select(DockerContainer).where(DockerContainer.node_id == node_id).order_by(DockerContainer.name))
+    return result.scalars().all()
+
+
+async def load_node_ports(node_id: uuid.UUID, db: DB) -> list[OpenPort]:
+    result = await db.execute(select(OpenPort).where(OpenPort.node_id == node_id).order_by(OpenPort.port))
+    return result.scalars().all()
+
+
+async def load_latest_metric(node_id: uuid.UUID, db: DB) -> NodeMetric | None:
+    result = await db.execute(
+        select(NodeMetric)
+        .where(NodeMetric.node_id == node_id)
+        .order_by(NodeMetric.created_at.desc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
+async def load_metric_history(node_id: uuid.UUID, db: DB, range_value: str = "24h", points: int = 48) -> list[NodeMetric]:
+    amount = 24
+    unit = "h"
+    if range_value.endswith("d"):
+        amount = int(range_value[:-1] or "7")
+        unit = "d"
+    elif range_value.endswith("h"):
+        amount = int(range_value[:-1] or "24")
+    else:
+        raise HTTPException(status_code=400, detail="Invalid range, use formats like 24h or 7d")
+
+    delta = timedelta(days=amount) if unit == "d" else timedelta(hours=amount)
+    since = datetime.now(UTC) - delta
+    result = await db.execute(
+        select(NodeMetric)
+        .where(NodeMetric.node_id == node_id, NodeMetric.created_at >= since)
+        .order_by(NodeMetric.created_at.asc())
+    )
+    rows = result.scalars().all()
+    if len(rows) <= max(points, 2):
+        return rows
+
+    stride = max(1, len(rows) // points)
+    sampled = rows[::stride]
+    if sampled[-1].id != rows[-1].id:
+        sampled.append(rows[-1])
+    return sampled
+
+
+async def load_node_tasks(node_id: uuid.UUID, db: DB) -> list[Task]:
+    result = await db.execute(
+        select(Task).where(Task.node_id == node_id).order_by(Task.created_at.desc()).limit(50)
+    )
+    return result.scalars().all()
+
+
+async def load_node_events(node_id: uuid.UUID, db: DB) -> list[Event]:
+    result = await db.execute(
+        select(Event).where(Event.node_id == node_id).order_by(Event.created_at.desc()).limit(300)
+    )
+    return [event for event in result.scalars().all() if not is_noisy_port_event(event)][:100]
+
+
+def serialize_event(event: Event) -> dict:
+    return {
+        "id": str(event.id),
+        "node_id": str(event.node_id) if event.node_id else None,
+        "severity": event.severity,
+        "type": event.type,
+        "message": event.message,
+        "extra": event.extra,
+        "created_at": event.created_at.isoformat(),
+    }
+
+
+def serialize_task(task: Task) -> dict:
+    return {
+        "id": str(task.id),
+        "node_id": str(task.node_id),
+        "type": task.type,
+        "payload": task.payload,
+        "status": task.status,
+        "result": task.result,
+        "error": task.error,
+        "created_at": task.created_at.isoformat(),
+        "started_at": task.started_at.isoformat() if task.started_at else None,
+        "finished_at": task.finished_at.isoformat() if task.finished_at else None,
+    }
 
 
 @router.post("", response_model=NodeOut, status_code=201)
@@ -85,19 +184,32 @@ async def list_nodes(_: CurrentUser, db: DB):
 
 @router.get("/{node_id}", response_model=NodeOut)
 async def get_node(node_id: uuid.UUID, _: CurrentUser, db: DB):
-    result = await db.execute(select(Node).where(Node.id == node_id))
-    node = result.scalar_one_or_none()
-    if not node:
-        raise HTTPException(status_code=404, detail="Node not found")
-    return node
+    return await get_node_or_404(node_id, db)
+
+
+@router.get("/{node_id}/details")
+async def get_node_details(node_id: uuid.UUID, _: CurrentUser, db: DB, range: str = "24h", points: int = 48):
+    node = await get_node_or_404(node_id, db)
+    containers = await load_node_containers(node_id, db)
+    ports = await load_node_ports(node_id, db)
+    latest_metric = await load_latest_metric(node_id, db)
+    history = await load_metric_history(node_id, db, range, points)
+    tasks = await load_node_tasks(node_id, db)
+    events = await load_node_events(node_id, db)
+    return {
+        "node": serialize_node(node),
+        "containers": [serialize_container(container) for container in containers],
+        "ports": [serialize_port(port, node_status=node.status) for port in ports],
+        "metrics": serialize_metric(latest_metric),
+        "history": [serialize_metric(metric) for metric in history],
+        "tasks": [serialize_task(task) for task in tasks],
+        "events": [serialize_event(event) for event in events],
+    }
 
 
 @router.delete("/{node_id}", status_code=204)
 async def delete_node(node_id: uuid.UUID, user: CurrentAdmin, db: DB):
-    result = await db.execute(select(Node).where(Node.id == node_id))
-    node = result.scalar_one_or_none()
-    if not node:
-        raise HTTPException(status_code=404, detail="Node not found")
+    node = await get_node_or_404(node_id, db)
     await log_action(
         db,
         user=user,
@@ -115,10 +227,7 @@ async def delete_node(node_id: uuid.UUID, user: CurrentAdmin, db: DB):
 
 @router.post("/{node_id}/enroll-token", response_model=NodeEnrollTokenOut)
 async def create_enroll_token(node_id: uuid.UUID, request: Request, user: CurrentOperator, db: DB):
-    result = await db.execute(select(Node).where(Node.id == node_id))
-    node = result.scalar_one_or_none()
-    if not node:
-        raise HTTPException(status_code=404, detail="Node not found")
+    node = await get_node_or_404(node_id, db)
 
     raw_token = generate_enroll_token()
     expires_at = datetime.now(UTC) + timedelta(minutes=settings.enroll_token_expire_minutes)
@@ -148,56 +257,15 @@ async def create_enroll_token(node_id: uuid.UUID, request: Request, user: Curren
 
 @router.get("/{node_id}/containers")
 async def get_containers(node_id: uuid.UUID, _: CurrentUser, db: DB):
-    result = await db.execute(select(DockerContainer).where(DockerContainer.node_id == node_id).order_by(DockerContainer.name))
-    containers = result.scalars().all()
-    return [
-        {
-            "id": str(c.id),
-            "container_id": c.container_id,
-            "name": c.name,
-            "image": c.image,
-            "status": c.status,
-            "state": c.state,
-            "ports": c.ports,
-            "networks": c.networks,
-            "mounts": c.mounts,
-            "cpu_percent": c.cpu_percent,
-            "ram_mb": c.ram_mb,
-            "restart_count": c.restart_count,
-            "health_status": c.health_status,
-            "updated_at": c.updated_at.isoformat() if c.updated_at else None,
-        }
-        for c in containers
-    ]
+    containers = await load_node_containers(node_id, db)
+    return [serialize_container(container) for container in containers]
 
 
 @router.get("/{node_id}/ports")
 async def get_ports(node_id: uuid.UUID, _: CurrentUser, db: DB):
-    node_result = await db.execute(select(Node).where(Node.id == node_id))
-    node = node_result.scalar_one_or_none()
-    if not node:
-        raise HTTPException(status_code=404, detail="Node not found")
-
-    result = await db.execute(select(OpenPort).where(OpenPort.node_id == node_id).order_by(OpenPort.port))
-    ports = result.scalars().all()
-    fresh_after = datetime.now(UTC) - timedelta(seconds=max(settings.node_offline_threshold_seconds * 2, 90))
-    return [
-        {
-            "id": str(p.id),
-            "protocol": p.protocol,
-            "port": p.port,
-            "listen_ip": p.listen_ip,
-            "process_name": p.process_name,
-            "pid": p.pid,
-            "user_name": p.user_name,
-            "container_name": p.container_name,
-            "is_expected": p.is_expected,
-            "status": "open" if node.status == "online" and p.last_seen_at and p.last_seen_at >= fresh_after else "stale",
-            "first_seen_at": p.first_seen_at.isoformat() if p.first_seen_at else None,
-            "last_seen_at": p.last_seen_at.isoformat() if p.last_seen_at else None,
-        }
-        for p in ports
-    ]
+    node = await get_node_or_404(node_id, db)
+    ports = await load_node_ports(node_id, db)
+    return [serialize_port(port, node_status=node.status) for port in ports]
 
 
 @router.patch("/{node_id}/ports/{port_id}/expected", status_code=204)
@@ -223,51 +291,17 @@ async def mark_port_expected(node_id: uuid.UUID, port_id: uuid.UUID, expected: b
 
 @router.get("/{node_id}/metrics/latest", response_model=NodeMetricOut | None)
 async def get_latest_metrics(node_id: uuid.UUID, _: CurrentUser, db: DB):
-    result = await db.execute(
-        select(NodeMetric)
-        .where(NodeMetric.node_id == node_id)
-        .order_by(NodeMetric.created_at.desc())
-        .limit(1)
-    )
-    return result.scalar_one_or_none()
+    return await load_latest_metric(node_id, db)
 
 
 @router.get("/{node_id}/metrics/history", response_model=list[NodeMetricHistoryPoint])
 async def get_metric_history(node_id: uuid.UUID, _: CurrentUser, db: DB, range: str = "24h", points: int = 48):
-    amount = 24
-    unit = "h"
-    if range.endswith("d"):
-        amount = int(range[:-1] or "7")
-        unit = "d"
-    elif range.endswith("h"):
-        amount = int(range[:-1] or "24")
-    else:
-        raise HTTPException(status_code=400, detail="Invalid range, use formats like 24h or 7d")
-
-    delta = timedelta(days=amount) if unit == "d" else timedelta(hours=amount)
-    since = datetime.now(UTC) - delta
-    result = await db.execute(
-        select(NodeMetric)
-        .where(NodeMetric.node_id == node_id, NodeMetric.created_at >= since)
-        .order_by(NodeMetric.created_at.asc())
-    )
-    rows = result.scalars().all()
-    if len(rows) <= max(points, 2):
-        return rows
-
-    stride = max(1, len(rows) // points)
-    sampled = rows[::stride]
-    if sampled[-1].id != rows[-1].id:
-        sampled.append(rows[-1])
-    return sampled
+    return await load_metric_history(node_id, db, range, points)
 
 
 @router.get("/{node_id}/tasks", response_model=list[TaskOutFull])
 async def get_node_tasks(node_id: uuid.UUID, _: CurrentUser, db: DB):
-    result = await db.execute(
-        select(Task).where(Task.node_id == node_id).order_by(Task.created_at.desc()).limit(50)
-    )
-    return result.scalars().all()
+    return await load_node_tasks(node_id, db)
 
 
 @router.post("/{node_id}/tasks", response_model=TaskOutFull, status_code=201)
@@ -275,10 +309,7 @@ async def create_task(node_id: uuid.UUID, body: TaskCreate, user: CurrentOperato
     if body.type not in ALLOWED_TASK_TYPES:
         raise HTTPException(status_code=400, detail=f"Task type '{body.type}' is not allowed")
 
-    result = await db.execute(select(Node).where(Node.id == node_id))
-    node = result.scalar_one_or_none()
-    if not node:
-        raise HTTPException(status_code=404, detail="Node not found")
+    node = await get_node_or_404(node_id, db)
     if node.capabilities and body.type not in node.capabilities:
         raise HTTPException(status_code=400, detail=f"Node agent does not advertise capability '{body.type}'")
 
@@ -303,21 +334,8 @@ async def create_task(node_id: uuid.UUID, body: TaskCreate, user: CurrentOperato
 
 @router.get("/{node_id}/events")
 async def get_node_events(node_id: uuid.UUID, _: CurrentUser, db: DB):
-    result = await db.execute(
-        select(Event).where(Event.node_id == node_id).order_by(Event.created_at.desc()).limit(300)
-    )
-    events = [e for e in result.scalars().all() if not is_noisy_port_event(e)][:100]
-    return [
-        {
-            "id": str(e.id),
-            "severity": e.severity,
-            "type": e.type,
-            "message": e.message,
-            "extra": e.extra,
-            "created_at": e.created_at.isoformat(),
-        }
-        for e in events
-    ]
+    events = await load_node_events(node_id, db)
+    return [serialize_event(event) for event in events]
 
 
 async def create_agent_update_task(node: Node, payload: dict, db: DB) -> Task:
@@ -348,10 +366,7 @@ async def create_agent_update_task(node: Node, payload: dict, db: DB) -> Task:
 @router.post("/{node_id}/update-agent", response_model=TaskOutFull, status_code=201)
 async def update_agent(node_id: uuid.UUID, user: CurrentOperator, db: DB):
     """Fetch latest agent release from GitHub and create an agent.update task."""
-    result = await db.execute(select(Node).where(Node.id == node_id))
-    node = result.scalar_one_or_none()
-    if not node:
-        raise HTTPException(status_code=404, detail="Node not found")
+    node = await get_node_or_404(node_id, db)
     if node.status != "online":
         raise HTTPException(status_code=400, detail="Node is not online")
 

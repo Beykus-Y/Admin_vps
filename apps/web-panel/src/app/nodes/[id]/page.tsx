@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { AlertTriangle, ArrowUpCircle, Loader2, Play, Power, RefreshCw, Square, Trash2 } from "lucide-react";
 import Layout from "@/components/Layout";
@@ -89,30 +89,23 @@ export default function NodeDetailPage() {
     }
 
     try {
-      const [nodeData, containerData, portData, metricData, historyData, taskData, eventData, versionData] = await Promise.all([
-        api.nodes.get(id),
-        api.nodes.containers(id),
-        api.nodes.ports(id),
-        api.nodes.metricsLatest(id),
-        api.nodes.metricsHistory(id, "24h", 48).catch(() => [] as NodeMetric[]),
-        api.nodes.tasks(id),
-        api.nodes.events(id),
-        api.version().catch(() => null as VersionInfo | null),
-      ]);
-      setNode(nodeData);
-      setContainers(containerData);
-      setPorts(portData);
-      setMetrics(metricData);
-      setHistory(historyData);
-      setTasks(taskData);
-      setEvents(eventData);
-      if (versionData) setVersionInfo(versionData);
+      const details = await api.nodes.details(id, "24h", 48);
+      setNode(details.node);
+      setContainers(details.containers);
+      setPorts(details.ports);
+      setMetrics(details.metrics);
+      setHistory(details.history);
+      setTasks(details.tasks);
+      setEvents(details.events);
     } catch {
       router.push("/login");
     }
   }, [id, router]);
 
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    api.version().then(setVersionInfo).catch(() => null);
+  }, []);
   useLiveReload(Boolean(node), load);
 
   async function handleUpdateAgent() {
@@ -159,15 +152,9 @@ export default function NodeDetailPage() {
   const canOperate = Boolean(user && user.role !== "viewer");
   const canDelete = user?.role === "admin";
   const capabilities = node.capabilities || [];
-  const supports = useCallback((type: string) => capabilities.length === 0 || capabilities.includes(type), [capabilities]);
-  const ramHistory = useMemo(
-    () => history.map((point) => (point.ram_used_mb != null && point.ram_total_mb ? (point.ram_used_mb / point.ram_total_mb) * 100 : null)),
-    [history]
-  );
-  const diskHistory = useMemo(
-    () => history.map((point) => (point.disk_used_gb != null && point.disk_total_gb ? (point.disk_used_gb / point.disk_total_gb) * 100 : null)),
-    [history]
-  );
+  const supports = (type: string) => capabilities.length === 0 || capabilities.includes(type);
+  const ramHistory = history.map((point) => (point.ram_used_mb != null && point.ram_total_mb ? (point.ram_used_mb / point.ram_total_mb) * 100 : null));
+  const diskHistory = history.map((point) => (point.disk_used_gb != null && point.disk_total_gb ? (point.disk_used_gb / point.disk_total_gb) * 100 : null));
 
   return (
     <Layout>
