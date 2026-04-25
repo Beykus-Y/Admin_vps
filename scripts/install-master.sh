@@ -72,6 +72,9 @@ else
 fi
 
 # ── Prompts ───────────────────────────────────────────────────────────────────
+# When piped via `curl | bash`, stdin is the pipe — reconnect to the terminal
+exec < /dev/tty
+
 echo ""
 echo "  What domain or IP will the panel run on?"
 echo "  Examples: panel.example.com  |  1.2.3.4  |  localhost"
@@ -110,8 +113,18 @@ fi
 
 if ! docker compose version &>/dev/null 2>&1; then
   info "Installing docker-compose-plugin..."
-  ${PKG_MGR} install -y docker-compose-plugin 2>/dev/null || \
-    die "Could not install docker-compose-plugin. See https://docs.docker.com/compose/install/"
+  if ! ${PKG_MGR} install -y docker-compose-plugin 2>/dev/null; then
+    info "Package install failed — downloading Docker Compose binary directly..."
+    COMPOSE_VER=$(curl -sfI https://github.com/docker/compose/releases/latest | \
+      grep -i '^location:' | grep -oP 'v[\d.]+' | head -1)
+    [[ -z "$COMPOSE_VER" ]] && COMPOSE_VER="v2.27.1"
+    mkdir -p /usr/local/lib/docker/cli-plugins
+    curl -fsSL "https://github.com/docker/compose/releases/download/${COMPOSE_VER}/docker-compose-linux-${ARCH}" \
+      -o /usr/local/lib/docker/cli-plugins/docker-compose
+    chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+    docker compose version &>/dev/null 2>&1 || \
+      die "Could not install Docker Compose. See https://docs.docker.com/compose/install/"
+  fi
 fi
 ok "Docker Compose available"
 
