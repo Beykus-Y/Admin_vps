@@ -72,14 +72,14 @@ else
 fi
 
 # ── Prompts ───────────────────────────────────────────────────────────────────
-# When piped via `curl | bash`, stdin is the pipe — reconnect to the terminal
-exec < /dev/tty
+# Redirect individual reads from /dev/tty so prompts work when piped via curl|bash
+# (exec < /dev/tty would break bash's own script reading from the pipe)
 
 echo ""
 echo "  What domain or IP will the panel run on?"
 echo "  Examples: panel.example.com  |  1.2.3.4  |  localhost"
 echo ""
-read -rp "  Domain/IP: " HOST
+read -rp "  Domain/IP: " HOST </dev/tty
 [[ -z "$HOST" ]] && die "Domain/IP is required"
 
 # IP/localhost → no TLS
@@ -89,11 +89,11 @@ if [[ "$HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || [[ "$HOST" == "localhost
 fi
 
 echo ""
-read -rp "  Admin username [admin]: " ADMIN_USER
+read -rp "  Admin username [admin]: " ADMIN_USER </dev/tty
 ADMIN_USER="${ADMIN_USER:-admin}"
 
 while true; do
-  read -rsp "  Admin password (min 8 chars): " ADMIN_PASS; echo ""
+  read -rsp "  Admin password (min 8 chars): " ADMIN_PASS </dev/tty; echo ""
   [[ ${#ADMIN_PASS} -ge 8 ]] && break
   warn "Password must be at least 8 characters"
 done
