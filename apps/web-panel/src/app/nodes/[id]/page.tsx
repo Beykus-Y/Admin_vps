@@ -2,8 +2,8 @@
 import { useEffect, useState } from "react";
 import { useRouter, useParams } from "next/navigation";
 import Layout from "@/components/Layout";
-import { api, Node, Container, Port, Task, NodeEvent } from "@/lib/api";
-import { Circle, RefreshCw, Square, Play, CheckCircle, ArrowUpCircle, Loader2 } from "lucide-react";
+import { api, Node, Container, Port, Task, NodeEvent, VersionInfo, isAgentOutdated } from "@/lib/api";
+import { Circle, RefreshCw, Square, Play, CheckCircle, ArrowUpCircle, Loader2, AlertTriangle } from "lucide-react";
 
 type Tab = "overview" | "docker" | "ports" | "tasks" | "events";
 
@@ -40,6 +40,7 @@ export default function NodeDetailPage() {
   const [events, setEvents] = useState<NodeEvent[]>([]);
   const [tab, setTab] = useState<Tab>("overview");
   const [taskLoading, setTaskLoading] = useState<string | null>(null);
+  const [versionInfo, setVersionInfo] = useState<VersionInfo | null>(null);
   const [updateLoading, setUpdateLoading] = useState(false);
   const [updateMsg, setUpdateMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
@@ -47,14 +48,16 @@ export default function NodeDetailPage() {
     const token = localStorage.getItem("token");
     if (!token) { router.push("/login"); return; }
     try {
-      const [n, c, p, t, e] = await Promise.all([
+      const [n, c, p, t, e, vi] = await Promise.all([
         api.nodes.get(id),
         api.nodes.containers(id),
         api.nodes.ports(id),
         api.nodes.tasks(id),
         api.nodes.events(id),
+        api.version().catch(() => null as VersionInfo | null),
       ]);
       setNode(n); setContainers(c); setPorts(p); setTasks(t); setEvents(e);
+      if (vi) setVersionInfo(vi);
     } catch {
       router.push("/login");
     }
@@ -97,11 +100,25 @@ export default function NodeDetailPage() {
           <StatusDot status={node.status} />
           <h1 className="text-xl font-bold text-white">{node.name}</h1>
           {node.public_ip && <span className="text-[#64748b] text-sm">{node.public_ip}</span>}
-          {node.agent_version && (
-            <span className="text-xs bg-[#2a2d3e] text-[#64748b] px-2 py-0.5 rounded font-mono">
-              agent {node.agent_version}
-            </span>
-          )}
+          {node.agent_version && (() => {
+            const outdated = isAgentOutdated(node.agent_version, versionInfo?.latest_agent_version ?? null);
+            return (
+              <span
+                className={`inline-flex items-center gap-1 text-xs font-mono px-2 py-0.5 rounded ${
+                  outdated
+                    ? "bg-yellow-500/10 text-yellow-400 border border-yellow-500/20"
+                    : "bg-[#2a2d3e] text-[#64748b]"
+                }`}
+                title={outdated ? `Latest: ${versionInfo?.latest_agent_version}` : "Up to date"}
+              >
+                {outdated && <AlertTriangle size={10} />}
+                agent {node.agent_version}
+                {outdated && versionInfo?.latest_agent_version && (
+                  <span className="text-[#475569]">→ {versionInfo.latest_agent_version}</span>
+                )}
+              </span>
+            );
+          })()}
           <span className="text-xs text-[#64748b] ml-auto">
             {node.last_seen_at ? `Last seen: ${new Date(node.last_seen_at).toLocaleString()}` : "Never seen"}
           </span>

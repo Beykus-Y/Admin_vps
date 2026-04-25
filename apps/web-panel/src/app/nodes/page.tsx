@@ -3,15 +3,33 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import Layout from "@/components/Layout";
-import { api, Node, EnrollToken } from "@/lib/api";
-import { Plus, Circle, Copy, X } from "lucide-react";
+import { api, Node, EnrollToken, VersionInfo, isAgentOutdated } from "@/lib/api";
+import { Plus, Circle, Copy, X, AlertTriangle } from "lucide-react";
 
 function StatusDot({ status }: { status: string }) {
   const color = { online: "text-green-500", offline: "text-red-500", pending: "text-yellow-500" }[status] ?? "text-gray-500";
   return <Circle size={8} className={`${color} fill-current`} />;
 }
 
-function NodeCard({ node }: { node: Node }) {
+function AgentVersionBadge({ version, latestVersion }: { version: string | null; latestVersion: string | null }) {
+  if (!version) return <span className="text-xs text-[#475569]">no agent</span>;
+  const outdated = isAgentOutdated(version, latestVersion);
+  return (
+    <span
+      className={`inline-flex items-center gap-1 text-xs font-mono px-1.5 py-0.5 rounded ${
+        outdated
+          ? "bg-yellow-500/10 text-yellow-400 border border-yellow-500/20"
+          : "bg-[#1e2433] text-[#64748b]"
+      }`}
+      title={outdated ? `Outdated — latest: ${latestVersion}` : "Up to date"}
+    >
+      {outdated && <AlertTriangle size={10} />}
+      {version}
+    </span>
+  );
+}
+
+function NodeCard({ node, latestAgentVersion }: { node: Node; latestAgentVersion: string | null }) {
   return (
     <Link href={`/nodes/${node.id}`} className="block bg-[#1a1d27] border border-[#2a2d3e] rounded-lg p-5 hover:border-[#0ea5e9]/40 transition-colors">
       <div className="flex items-center justify-between mb-3">
@@ -26,6 +44,10 @@ function NodeCard({ node }: { node: Node }) {
         {node.os && <div>OS: <span className="text-white">{node.os}</span></div>}
         {node.hostname && <div>Host: <span className="text-white">{node.hostname}</span></div>}
         {node.location && <div>Location: <span className="text-white">{node.location}</span></div>}
+        <div className="flex items-center gap-1.5">
+          <span>Agent:</span>
+          <AgentVersionBadge version={node.agent_version} latestVersion={latestAgentVersion} />
+        </div>
         {node.last_seen_at && (
           <div>Last seen: <span className="text-white">{new Date(node.last_seen_at).toLocaleString()}</span></div>
         )}
@@ -129,13 +151,19 @@ function AddNodeModal({ onClose, onCreated }: { onClose: () => void; onCreated: 
 export default function NodesPage() {
   const router = useRouter();
   const [nodes, setNodes] = useState<Node[]>([]);
+  const [latestAgentVersion, setLatestAgentVersion] = useState<string | null>(null);
   const [showModal, setShowModal] = useState(false);
 
   async function load() {
     const token = localStorage.getItem("token");
     if (!token) { router.push("/login"); return; }
     try {
-      setNodes(await api.nodes.list());
+      const [nodeList, versionInfo] = await Promise.all([
+        api.nodes.list(),
+        api.version().catch(() => null as VersionInfo | null),
+      ]);
+      setNodes(nodeList);
+      setLatestAgentVersion(versionInfo?.latest_agent_version ?? null);
     } catch {
       router.push("/login");
     }
@@ -143,11 +171,23 @@ export default function NodesPage() {
 
   useEffect(() => { load(); }, []);
 
+  const outdatedCount = nodes.filter(
+    (n) => n.status === "online" && isAgentOutdated(n.agent_version, latestAgentVersion)
+  ).length;
+
   return (
     <Layout>
       <div className="p-8">
         <div className="flex items-center justify-between mb-6">
-          <h1 className="text-xl font-bold text-white">Nodes</h1>
+          <div className="flex items-center gap-3">
+            <h1 className="text-xl font-bold text-white">Nodes</h1>
+            {outdatedCount > 0 && (
+              <span className="flex items-center gap-1 text-xs bg-yellow-500/10 text-yellow-400 border border-yellow-500/20 px-2 py-0.5 rounded">
+                <AlertTriangle size={11} />
+                {outdatedCount} agent{outdatedCount > 1 ? "s" : ""} outdated
+              </span>
+            )}
+          </div>
           <button onClick={() => setShowModal(true)}
             className="flex items-center gap-1.5 bg-[#0ea5e9] hover:bg-[#0284c7] text-white px-4 py-2 rounded text-sm font-medium transition-colors">
             <Plus size={15} />
@@ -159,7 +199,7 @@ export default function NodesPage() {
           <div className="text-[#64748b] text-sm">No nodes yet. Add your first VPS.</div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {nodes.map((n) => <NodeCard key={n.id} node={n} />)}
+            {nodes.map((n) => <NodeCard key={n.id} node={n} latestAgentVersion={latestAgentVersion} />)}
           </div>
         )}
       </div>

@@ -35,6 +35,7 @@ export const api = {
     }),
 
   overview: () => request<Overview>("/overview"),
+  version: () => request<VersionInfo>("/version"),
 
   nodes: {
     list: () => request<Node[]>("/nodes"),
@@ -132,4 +133,21 @@ export interface NodeEvent {
   type: string;
   message: string;
   created_at: string;
+}
+
+export interface VersionInfo {
+  master_version: string;
+  latest_agent_version: string | null;
+}
+
+/** Returns true if latestVersion is strictly newer than currentVersion (semver-ish). */
+export function isAgentOutdated(current: string | null, latest: string | null): boolean {
+  if (!current || !latest) return false;
+  const strip = (v: string) => v.replace(/^[^\d]*/, ""); // strip "v" prefix
+  const toNums = (v: string) => strip(v).split(".").map(Number);
+  const [ca, cb, cc = 0] = toNums(current);
+  const [la, lb, lc = 0] = toNums(latest);
+  if (la !== ca) return la > ca;
+  if (lb !== cb) return lb > cb;
+  return lc > cc;
 }

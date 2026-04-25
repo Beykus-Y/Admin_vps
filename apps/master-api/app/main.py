@@ -5,7 +5,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import agent, auth, nodes, overview
+from app.api.routes import agent, auth, nodes, overview, version
+from app.core.config import settings
 from app.services.node_monitor import run_monitor
 
 
@@ -20,7 +21,7 @@ async def lifespan(app: FastAPI):
         pass
 
 
-app = FastAPI(title="FilinControl API", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="FilinControl API", version=settings.app_version, lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -34,6 +35,7 @@ app.include_router(auth.router, prefix="/api")
 app.include_router(nodes.router, prefix="/api")
 app.include_router(overview.router, prefix="/api")
 app.include_router(agent.router, prefix="/api")
+app.include_router(version.router, prefix="/api")
 
 
 @app.get("/health")

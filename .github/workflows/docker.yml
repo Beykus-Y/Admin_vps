@@ -3,6 +3,8 @@ name: Build & Push Docker Images
 on:
   push:
     branches: [main]
+    tags:
+      - "master/v*"
     paths:
       - "apps/master-api/**"
       - "apps/web-panel/**"
@@ -14,8 +16,26 @@ env:
   OWNER: ${{ github.repository_owner }}
 
 jobs:
+  resolve-version:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - name: Determine version
+        id: ver
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/master/v* ]]; then
+            # tag "master/v0.2.0" → version "0.2.0"
+            echo "version=${GITHUB_REF_NAME#master/v}" >> $GITHUB_OUTPUT
+          else
+            # branch push → use short SHA as version
+            echo "version=dev-${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
+          fi
+
   master-api:
     name: master-api
+    needs: resolve-version
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -40,8 +60,11 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.OWNER }}/filincontrol-api
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=sha,prefix=sha-
+            # semver tag → e.g. v0.2.0 + latest
+            type=match,pattern=master/v(.*),group=1,value=${{ github.ref_name }}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/master/') }}
+            # branch push → sha only, no latest
+            type=sha,prefix=sha-,enable=${{ !startsWith(github.ref, 'refs/tags/') }}
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -50,11 +73,14 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            APP_VERSION=${{ needs.resolve-version.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
   web-panel:
     name: web-panel
+    needs: resolve-version
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -79,8 +105,9 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.OWNER }}/filincontrol-web
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=sha,prefix=sha-
+            type=match,pattern=master/v(.*),group=1,value=${{ github.ref_name }}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/master/') }}
+            type=sha,prefix=sha-,enable=${{ !startsWith(github.ref, 'refs/tags/') }}
 
       - name: Build and push
         uses: docker/build-push-action@v6

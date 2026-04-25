@@ -5,6 +5,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     app_name: str = "FilinControl Master API"
+    app_version: str = "dev"
     debug: bool = False
 
     database_url: str = "postgresql+asyncpg://filin:filin@postgres:5432/filin"
