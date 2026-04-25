@@ -19,5 +19,9 @@ class Settings(BaseSettings):
 
     node_offline_threshold_seconds: int = 30
 
+    agent_auto_update_enabled: bool = False
+    agent_auto_update_check_seconds: int = 300
+    agent_auto_update_batch_size: int = 1
+
 
 settings = Settings()

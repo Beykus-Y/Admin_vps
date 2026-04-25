@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class EnrollRequest(BaseModel):
@@ -34,16 +34,28 @@ class SnapshotMetrics(BaseModel):
     network_tx_bytes: int | None = None
 
 
+class SnapshotSystem(BaseModel):
+    hostname: str | None = None
+    public_ip: str | None = None
+    os: str | None = None
+    arch: str | None = None
+    uptime_seconds: int | None = None
+    kernel: str | None = None
+    cpu_model: str | None = None
+    cpu_cores: int | None = None
+    local_ips: list[str] = Field(default_factory=list)
+
+
 class SnapshotContainer(BaseModel):
     container_id: str
     name: str
     image: str | None = None
     status: str | None = None
     state: str | None = None
-    ports: list = []
-    networks: list = []
-    mounts: list = []
-    labels: dict = {}
+    ports: list = Field(default_factory=list)
+    networks: list = Field(default_factory=list)
+    mounts: list = Field(default_factory=list)
+    labels: dict = Field(default_factory=dict)
     cpu_percent: float | None = None
     ram_mb: float | None = None
     restart_count: int | None = None
@@ -61,9 +73,13 @@ class SnapshotPort(BaseModel):
 
 
 class SnapshotRequest(BaseModel):
+    system: SnapshotSystem | None = None
     metrics: SnapshotMetrics | None = None
-    containers: list[SnapshotContainer] = []
-    ports: list[SnapshotPort] = []
+    containers: list[SnapshotContainer] = Field(default_factory=list)
+    ports: list[SnapshotPort] = Field(default_factory=list)
+    containers_collected: bool = True
+    ports_collected: bool = True
+    errors: list[str] = Field(default_factory=list)
 
 
 class TaskOut(BaseModel):

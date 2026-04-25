@@ -46,10 +46,11 @@ export default function DashboardPage() {
       <div className="p-8">
         <h1 className="text-xl font-bold text-white mb-6">Infrastructure Overview</h1>
 
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
           <StatCard label="Total Nodes" value={data.nodes.total} />
           <StatCard label="Online" value={data.nodes.online} sub={`${data.nodes.offline} offline`} />
           <StatCard label="Containers" value={data.containers.total} sub={`${data.containers.running} running`} />
+          <StatCard label="Open Ports" value={data.ports.total} sub={`${data.ports.unexpected} unexpected`} />
           <StatCard label="Pending Nodes" value={data.nodes.pending} />
         </div>
 

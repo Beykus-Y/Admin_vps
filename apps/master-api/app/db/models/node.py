@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, String, Text
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -17,6 +17,11 @@ class Node(UUIDMixin, TimestampMixin, Base):
     public_ip: Mapped[str | None] = mapped_column(String(64))
     os: Mapped[str | None] = mapped_column(String(128))
     arch: Mapped[str | None] = mapped_column(String(32))
+    uptime_seconds: Mapped[int | None] = mapped_column(BigInteger)
+    kernel: Mapped[str | None] = mapped_column(String(128))
+    cpu_model: Mapped[str | None] = mapped_column(String(256))
+    cpu_cores: Mapped[int | None] = mapped_column(Integer)
+    local_ips: Mapped[list] = mapped_column(JSONB, default=list)
     provider: Mapped[str | None] = mapped_column(String(64))
     location: Mapped[str | None] = mapped_column(String(64))
     group_name: Mapped[str | None] = mapped_column(String(64))

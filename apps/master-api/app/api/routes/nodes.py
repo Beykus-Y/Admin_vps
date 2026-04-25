@@ -2,16 +2,16 @@ import uuid
 import shlex
 from datetime import UTC, datetime, timedelta
 
-import httpx
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, HTTPException, Request
 from sqlalchemy import select
 
 from app.api.deps import DB, CurrentUser
 from app.core.config import settings
 from app.core.security import generate_enroll_token, hash_token
-from app.db.models import DockerContainer, Event, Node, NodeEnrollToken, OpenPort, Task
-from app.schemas.node import NodeCreate, NodeEnrollTokenOut, NodeOut
+from app.db.models import DockerContainer, Event, Node, NodeEnrollToken, NodeMetric, OpenPort, Task
+from app.schemas.node import NodeCreate, NodeEnrollTokenOut, NodeMetricOut, NodeOut
 from app.schemas.task import ALLOWED_TASK_TYPES, TaskCreate, TaskOutFull
+from app.services.agent_releases import build_agent_update_payload, is_agent_outdated
 
 router = APIRouter(prefix="/nodes", tags=["nodes"])
 
@@ -94,7 +94,7 @@ async def create_enroll_token(node_id: uuid.UUID, request: Request, _: CurrentUs
 
 @router.get("/{node_id}/containers")
 async def get_containers(node_id: uuid.UUID, _: CurrentUser, db: DB):
-    result = await db.execute(select(DockerContainer).where(DockerContainer.node_id == node_id))
+    result = await db.execute(select(DockerContainer).where(DockerContainer.node_id == node_id).order_by(DockerContainer.name))
     containers = result.scalars().all()
     return [
         {
@@ -105,6 +105,8 @@ async def get_containers(node_id: uuid.UUID, _: CurrentUser, db: DB):
             "status": c.status,
             "state": c.state,
             "ports": c.ports,
+            "networks": c.networks,
+            "mounts": c.mounts,
             "cpu_percent": c.cpu_percent,
             "ram_mb": c.ram_mb,
             "restart_count": c.restart_count,
@@ -117,8 +119,14 @@ async def get_containers(node_id: uuid.UUID, _: CurrentUser, db: DB):
 
 @router.get("/{node_id}/ports")
 async def get_ports(node_id: uuid.UUID, _: CurrentUser, db: DB):
+    node_result = await db.execute(select(Node).where(Node.id == node_id))
+    node = node_result.scalar_one_or_none()
+    if not node:
+        raise HTTPException(status_code=404, detail="Node not found")
+
     result = await db.execute(select(OpenPort).where(OpenPort.node_id == node_id).order_by(OpenPort.port))
     ports = result.scalars().all()
+    fresh_after = datetime.now(UTC) - timedelta(seconds=max(settings.node_offline_threshold_seconds * 2, 90))
     return [
         {
             "id": str(p.id),
@@ -126,8 +134,11 @@ async def get_ports(node_id: uuid.UUID, _: CurrentUser, db: DB):
             "port": p.port,
             "listen_ip": p.listen_ip,
             "process_name": p.process_name,
+            "pid": p.pid,
+            "user_name": p.user_name,
             "container_name": p.container_name,
             "is_expected": p.is_expected,
+            "status": "open" if node.status == "online" and p.last_seen_at and p.last_seen_at >= fresh_after else "stale",
             "first_seen_at": p.first_seen_at.isoformat() if p.first_seen_at else None,
             "last_seen_at": p.last_seen_at.isoformat() if p.last_seen_at else None,
         }
@@ -143,6 +154,17 @@ async def mark_port_expected(node_id: uuid.UUID, port_id: uuid.UUID, expected: b
         raise HTTPException(status_code=404, detail="Port not found")
     port.is_expected = expected
     await db.commit()
+
+
+@router.get("/{node_id}/metrics/latest", response_model=NodeMetricOut | None)
+async def get_latest_metrics(node_id: uuid.UUID, _: CurrentUser, db: DB):
+    result = await db.execute(
+        select(NodeMetric)
+        .where(NodeMetric.node_id == node_id)
+        .order_by(NodeMetric.created_at.desc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
 
 
 @router.get("/{node_id}/tasks", response_model=list[TaskOutFull])
@@ -189,74 +211,73 @@ async def get_node_events(node_id: uuid.UUID, _: CurrentUser, db: DB):
     ]
 
 
+async def create_agent_update_task(node: Node, payload: dict, db: DB) -> Task:
+    existing_result = await db.execute(
+        select(Task).where(
+            Task.node_id == node.id,
+            Task.type == "agent.update",
+            Task.status.in_(["pending", "running"]),
+        )
+    )
+    existing = existing_result.scalar_one_or_none()
+    if existing:
+        return existing
+
+    task = Task(node_id=node.id, type="agent.update", payload=payload)
+    db.add(task)
+    db.add(Event(
+        node_id=node.id,
+        severity="info",
+        type="agent.update_scheduled",
+        message=f"Agent update to {payload.get('version')} ({payload.get('arch')}) scheduled",
+        extra={"version": payload.get("version"), "arch": payload.get("arch")},
+    ))
+    await db.flush()
+    return task
+
+
 @router.post("/{node_id}/update-agent", response_model=TaskOutFull, status_code=201)
 async def update_agent(node_id: uuid.UUID, _: CurrentUser, db: DB):
-    """Fetch latest agent release from GitHub, create agent.update task."""
+    """Fetch latest agent release from GitHub and create an agent.update task."""
     result = await db.execute(select(Node).where(Node.id == node_id))
     node = result.scalar_one_or_none()
     if not node:
         raise HTTPException(status_code=404, detail="Node not found")
-
     if node.status != "online":
         raise HTTPException(status_code=400, detail="Node is not online")
 
-    # Determine arch: default to amd64, support arm64
-    arch = "amd64"
-    if node.arch and "arm" in node.arch.lower():
-        arch = "arm64"
-
-    # Fetch latest release info from GitHub API
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(
-                f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest",
-                headers={"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"},
-            )
-            resp.raise_for_status()
-            release = resp.json()
+        payload = await build_agent_update_payload(node.arch)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Failed to fetch latest release from GitHub: {e}")
+        raise HTTPException(status_code=502, detail=f"Failed to resolve latest agent release: {e}")
 
-    tag_name = release.get("tag_name", "")
-    assets = release.get("assets", [])
-
-    binary_name = f"filin-agent-linux-{arch}"
-    checksum_name = f"filin-agent-linux-{arch}.sha256"
-
-    download_url = next((a["browser_download_url"] for a in assets if a["name"] == binary_name), None)
-    checksum_url = next((a["browser_download_url"] for a in assets if a["name"] == checksum_name), None)
-
-    if not download_url:
-        raise HTTPException(status_code=404, detail=f"No release asset '{binary_name}' found in latest release {tag_name}")
-
-    checksum_sha256 = None
-    if checksum_url:
-        try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                cr = await client.get(checksum_url)
-                cr.raise_for_status()
-                # file format: "<hash>  filin-agent-linux-amd64"
-                checksum_sha256 = cr.text.split()[0]
-        except Exception:
-            pass  # proceed without checksum verification
-
-    payload = {
-        "download_url": download_url,
-        "version": tag_name,
-        "arch": arch,
-    }
-    if checksum_sha256:
-        payload["checksum_sha256"] = checksum_sha256
-
-    task = Task(node_id=node_id, type="agent.update", payload=payload)
-    db.add(task)
-    db.add(Event(
-        node_id=node_id,
-        severity="info",
-        type="agent.update_scheduled",
-        message=f"Agent update to {tag_name} ({arch}) scheduled",
-        extra={"version": tag_name, "arch": arch},
-    ))
+    task = await create_agent_update_task(node, payload, db)
     await db.commit()
     await db.refresh(task)
     return task
+
+
+@router.post("/update-agents", response_model=list[TaskOutFull], status_code=201)
+async def update_outdated_agents(_: CurrentUser, db: DB):
+    try:
+        payload_by_arch = {
+            "amd64": await build_agent_update_payload("amd64"),
+            "arm64": await build_agent_update_payload("arm64"),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Failed to resolve latest agent release: {e}")
+
+    latest_version = payload_by_arch["amd64"].get("version")
+    nodes_result = await db.execute(select(Node).where(Node.status == "online"))
+    nodes = nodes_result.scalars().all()
+    tasks: list[Task] = []
+    for node in nodes:
+        if not is_agent_outdated(node.agent_version, latest_version):
+            continue
+        arch = "arm64" if node.arch and "arm" in node.arch.lower() else "amd64"
+        tasks.append(await create_agent_update_task(node, payload_by_arch[arch], db))
+
+    await db.commit()
+    for task in tasks:
+        await db.refresh(task)
+    return tasks

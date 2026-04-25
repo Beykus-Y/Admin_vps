@@ -1,7 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.api.deps import DB, AgentNode
@@ -92,6 +92,22 @@ async def snapshot(body: SnapshotRequest, node: AgentNode, db: DB):
     node.last_seen_at = now
     node.status = "online"
 
+    if body.system:
+        system = body.system
+        if system.hostname:
+            node.hostname = system.hostname
+        if system.public_ip:
+            node.public_ip = system.public_ip
+        if system.os:
+            node.os = system.os
+        if system.arch:
+            node.arch = system.arch
+        node.uptime_seconds = system.uptime_seconds
+        node.kernel = system.kernel
+        node.cpu_model = system.cpu_model
+        node.cpu_cores = system.cpu_cores
+        node.local_ips = system.local_ips
+
     if body.metrics:
         m = body.metrics
         db.add(NodeMetric(
@@ -108,79 +124,102 @@ async def snapshot(body: SnapshotRequest, node: AgentNode, db: DB):
             network_tx_bytes=m.network_tx_bytes,
         ))
 
-    for c in body.containers:
-        stmt = (
-            pg_insert(DockerContainer)
-            .values(
-                node_id=node.id,
-                container_id=c.container_id,
-                name=c.name,
-                image=c.image,
-                status=c.status,
-                state=c.state,
-                ports=c.ports,
-                networks=c.networks,
-                mounts=c.mounts,
-                labels=c.labels,
-                cpu_percent=c.cpu_percent,
-                ram_mb=c.ram_mb,
-                restart_count=c.restart_count,
-                health_status=c.health_status,
-                updated_at=now,
+    if body.containers_collected:
+        seen_container_ids = [c.container_id for c in body.containers]
+        for c in body.containers:
+            stmt = (
+                pg_insert(DockerContainer)
+                .values(
+                    node_id=node.id,
+                    container_id=c.container_id,
+                    name=c.name,
+                    image=c.image,
+                    status=c.status,
+                    state=c.state,
+                    ports=c.ports,
+                    networks=c.networks,
+                    mounts=c.mounts,
+                    labels=c.labels,
+                    cpu_percent=c.cpu_percent,
+                    ram_mb=c.ram_mb,
+                    restart_count=c.restart_count,
+                    health_status=c.health_status,
+                    updated_at=now,
+                )
+                .on_conflict_do_update(
+                    index_elements=["node_id", "container_id"],
+                    set_={
+                        "name": c.name,
+                        "image": c.image,
+                        "status": c.status,
+                        "state": c.state,
+                        "ports": c.ports,
+                        "networks": c.networks,
+                        "mounts": c.mounts,
+                        "labels": c.labels,
+                        "cpu_percent": c.cpu_percent,
+                        "ram_mb": c.ram_mb,
+                        "restart_count": c.restart_count,
+                        "health_status": c.health_status,
+                        "updated_at": now,
+                    },
+                )
             )
-            .on_conflict_do_update(
-                index_elements=["node_id", "container_id"],
-                set_={
-                    "name": c.name,
-                    "image": c.image,
-                    "status": c.status,
-                    "state": c.state,
-                    "ports": c.ports,
-                    "networks": c.networks,
-                    "mounts": c.mounts,
-                    "labels": c.labels,
-                    "cpu_percent": c.cpu_percent,
-                    "ram_mb": c.ram_mb,
-                    "restart_count": c.restart_count,
-                    "health_status": c.health_status,
-                    "updated_at": now,
-                },
+            await db.execute(stmt)
+        cleanup = delete(DockerContainer).where(DockerContainer.node_id == node.id)
+        if seen_container_ids:
+            cleanup = cleanup.where(DockerContainer.container_id.not_in(seen_container_ids))
+        await db.execute(cleanup)
+
+    if body.ports_collected:
+        existing_ports_result = await db.execute(select(OpenPort).where(OpenPort.node_id == node.id))
+        existing_ports = {(p.protocol, p.port, p.listen_ip): p for p in existing_ports_result.scalars()}
+
+        for p in body.ports:
+            key = (p.protocol, p.port, p.listen_ip)
+            if key in existing_ports:
+                existing_ports[key].last_seen_at = now
+                existing_ports[key].process_name = p.process_name
+                existing_ports[key].pid = p.pid
+                existing_ports[key].user_name = p.user_name
+                existing_ports[key].container_name = p.container_name
+            else:
+                new_port = OpenPort(
+                    node_id=node.id,
+                    protocol=p.protocol,
+                    port=p.port,
+                    listen_ip=p.listen_ip,
+                    process_name=p.process_name,
+                    pid=p.pid,
+                    user_name=p.user_name,
+                    container_name=p.container_name,
+                    is_expected=False,
+                )
+                db.add(new_port)
+                db.add(Event(
+                    node_id=node.id,
+                    severity="warning",
+                    type="port.new_unexpected",
+                    message=f"New port opened: {p.protocol}/{p.port} on {p.listen_ip} (process: {p.process_name})",
+                    extra={"port": p.port, "protocol": p.protocol, "listen_ip": p.listen_ip, "process": p.process_name},
+                ))
+
+    for message in body.errors:
+        event_exists = await db.execute(
+            select(Event.id).where(
+                Event.node_id == node.id,
+                Event.type == "agent.inventory_error",
+                Event.message == message,
+                Event.created_at > now - timedelta(minutes=15),
             )
         )
-        await db.execute(stmt)
-
-    existing_ports_result = await db.execute(select(OpenPort).where(OpenPort.node_id == node.id))
-    existing_ports = {(p.protocol, p.port, p.listen_ip): p for p in existing_ports_result.scalars()}
-    seen_keys = set()
-
-    for p in body.ports:
-        key = (p.protocol, p.port, p.listen_ip)
-        seen_keys.add(key)
-        if key in existing_ports:
-            existing_ports[key].last_seen_at = now
-            existing_ports[key].process_name = p.process_name
-            existing_ports[key].pid = p.pid
-            existing_ports[key].user_name = p.user_name
-            existing_ports[key].container_name = p.container_name
-        else:
-            new_port = OpenPort(
-                node_id=node.id,
-                protocol=p.protocol,
-                port=p.port,
-                listen_ip=p.listen_ip,
-                process_name=p.process_name,
-                pid=p.pid,
-                user_name=p.user_name,
-                container_name=p.container_name,
-                is_expected=False,
-            )
-            db.add(new_port)
+        if not event_exists.scalar_one_or_none():
             db.add(Event(
                 node_id=node.id,
                 severity="warning",
-                type="port.new_unexpected",
-                message=f"New port opened: {p.protocol}/{p.port} on {p.listen_ip} (process: {p.process_name})",
-                extra={"port": p.port, "protocol": p.protocol, "listen_ip": p.listen_ip, "process": p.process_name},
+                type="agent.inventory_error",
+                message=message,
+                extra={},
             ))
 
     await db.commit()

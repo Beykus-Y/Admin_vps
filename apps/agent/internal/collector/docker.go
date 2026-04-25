@@ -40,7 +40,7 @@ func CollectContainers(ctx context.Context) ([]agentclient.SnapshotContainer, er
 		resp.Body.Close()
 	}
 
-	var result []agentclient.SnapshotContainer
+	result := []agentclient.SnapshotContainer{}
 	for _, c := range containers {
 		name := c.ID[:12]
 		if len(c.Names) > 0 {
@@ -53,12 +53,24 @@ func CollectContainers(ctx context.Context) ([]agentclient.SnapshotContainer, er
 			Image:       c.Image,
 			Status:      c.Status,
 			State:       c.State,
-			Labels:      c.Labels,
+			Ports:       []string{},
+			Networks:    []string{},
+			Mounts:      []string{},
+			Labels:      map[string]string{},
+		}
+		if c.Labels != nil {
+			sc.Labels = c.Labels
 		}
 
 		for _, p := range c.Ports {
 			if p.PublicPort > 0 {
-				sc.Ports = append(sc.Ports, fmt.Sprintf("%d:%d/%s", p.PublicPort, p.PrivatePort, p.Type))
+				if p.IP != "" {
+					sc.Ports = append(sc.Ports, fmt.Sprintf("%s:%d:%d/%s", p.IP, p.PublicPort, p.PrivatePort, p.Type))
+				} else {
+					sc.Ports = append(sc.Ports, fmt.Sprintf("%d:%d/%s", p.PublicPort, p.PrivatePort, p.Type))
+				}
+			} else {
+				sc.Ports = append(sc.Ports, fmt.Sprintf("%d/%s", p.PrivatePort, p.Type))
 			}
 		}
 		for netName := range c.NetworkSettings.Networks {
@@ -76,6 +88,13 @@ func CollectContainers(ctx context.Context) ([]agentclient.SnapshotContainer, er
 				sc.CPUPercent = (cpuDelta / systemDelta) * numCPU * 100.0
 			}
 			sc.RAMMB = float64(stats.MemoryStats.Usage) / 1024 / 1024
+		}
+
+		if details, err := cli.ContainerInspect(ctx, c.ID); err == nil {
+			sc.RestartCount = details.RestartCount
+			if details.State != nil && details.State.Health != nil {
+				sc.HealthStatus = details.State.Health.Status
+			}
 		}
 
 		result = append(result, sc)

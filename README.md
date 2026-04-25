@@ -69,6 +69,12 @@ curl -fsSL https://raw.githubusercontent.com/Beykus-Y/Admin_vps/main/scripts/ins
 Open the panel → Node detail → click **Update Agent**.
 The backend fetches the latest release from GitHub, creates an `agent.update` task, and the agent replaces itself and restarts.
 
+To let the master schedule updates for outdated online agents automatically, set:
+
+```env
+AGENT_AUTO_UPDATE_ENABLED=true
+```
+
 ---
 
 ## CI/CD

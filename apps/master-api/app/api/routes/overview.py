@@ -1,8 +1,11 @@
+from datetime import UTC, datetime, timedelta
+
 from fastapi import APIRouter
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from app.api.deps import DB, CurrentUser
-from app.db.models import DockerContainer, Event, Node
+from app.core.config import settings
+from app.db.models import DockerContainer, Event, Node, OpenPort
 
 router = APIRouter(prefix="/overview", tags=["overview"])
 
@@ -21,6 +24,13 @@ async def get_overview(_: CurrentUser, db: DB):
     containers = containers_result.scalars().all()
     running = sum(1 for c in containers if c.state == "running")
 
+    ports_result = await db.execute(select(OpenPort))
+    all_ports = ports_result.scalars().all()
+    online_node_ids = {node.id for node in nodes if node.status == "online"}
+    fresh_after = datetime.now(UTC) - timedelta(seconds=max(settings.node_offline_threshold_seconds * 2, 90))
+    ports = [p for p in all_ports if p.node_id in online_node_ids and p.last_seen_at and p.last_seen_at >= fresh_after]
+    unexpected_ports = sum(1 for p in ports if not p.is_expected)
+
     events_result = await db.execute(
         select(Event)
         .where(Event.severity.in_(["warning", "critical"]))
@@ -32,6 +42,7 @@ async def get_overview(_: CurrentUser, db: DB):
     return {
         "nodes": {"total": total, "online": online, "offline": offline, "pending": pending},
         "containers": {"total": len(containers), "running": running},
+        "ports": {"total": len(ports), "unexpected": unexpected_ports},
         "recent_events": [
             {
                 "id": str(e.id),

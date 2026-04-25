@@ -20,6 +20,11 @@ class NodeOut(BaseModel):
     public_ip: str | None
     os: str | None
     arch: str | None
+    uptime_seconds: int | None
+    kernel: str | None
+    cpu_model: str | None
+    cpu_cores: int | None
+    local_ips: list
     provider: str | None
     location: str | None
     group_name: str | None
@@ -35,3 +40,20 @@ class NodeEnrollTokenOut(BaseModel):
     install_command: str
     enroll_token: str
     expires_at: datetime
+
+
+class NodeMetricOut(BaseModel):
+    id: uuid.UUID
+    cpu_percent: float | None
+    ram_used_mb: int | None
+    ram_total_mb: int | None
+    disk_used_gb: float | None
+    disk_total_gb: float | None
+    load_1: float | None
+    load_5: float | None
+    load_15: float | None
+    network_rx_bytes: int | None
+    network_tx_bytes: int | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}

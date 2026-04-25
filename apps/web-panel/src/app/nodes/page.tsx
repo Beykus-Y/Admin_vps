@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import Layout from "@/components/Layout";
 import { api, Node, EnrollToken, VersionInfo, isAgentOutdated } from "@/lib/api";
-import { Plus, Circle, Copy, X, AlertTriangle } from "lucide-react";
+import { Plus, Circle, Copy, X, AlertTriangle, ArrowUpCircle, Loader2 } from "lucide-react";
 
 function StatusDot({ status }: { status: string }) {
   const color = { online: "text-green-500", offline: "text-red-500", pending: "text-yellow-500" }[status] ?? "text-gray-500";
@@ -153,6 +153,8 @@ export default function NodesPage() {
   const [nodes, setNodes] = useState<Node[]>([]);
   const [latestAgentVersion, setLatestAgentVersion] = useState<string | null>(null);
   const [showModal, setShowModal] = useState(false);
+  const [bulkUpdateLoading, setBulkUpdateLoading] = useState(false);
+  const [bulkUpdateMsg, setBulkUpdateMsg] = useState<string | null>(null);
 
   async function load() {
     const token = localStorage.getItem("token");
@@ -175,6 +177,20 @@ export default function NodesPage() {
     (n) => n.status === "online" && isAgentOutdated(n.agent_version, latestAgentVersion)
   ).length;
 
+  async function handleUpdateOutdatedAgents() {
+    setBulkUpdateLoading(true);
+    setBulkUpdateMsg(null);
+    try {
+      const tasks = await api.nodes.updateOutdatedAgents();
+      setBulkUpdateMsg(`${tasks.length} update task${tasks.length === 1 ? "" : "s"} created`);
+      await load();
+    } catch (err: unknown) {
+      setBulkUpdateMsg(err instanceof Error ? err.message : "Agent update failed");
+    } finally {
+      setBulkUpdateLoading(false);
+    }
+  }
+
   return (
     <Layout>
       <div className="p-8">
@@ -188,12 +204,27 @@ export default function NodesPage() {
               </span>
             )}
           </div>
-          <button onClick={() => setShowModal(true)}
-            className="flex items-center gap-1.5 bg-[#0ea5e9] hover:bg-[#0284c7] text-white px-4 py-2 rounded text-sm font-medium transition-colors">
-            <Plus size={15} />
-            Add Node
-          </button>
+          <div className="flex items-center gap-2">
+            {outdatedCount > 0 && (
+              <button onClick={handleUpdateOutdatedAgents} disabled={bulkUpdateLoading}
+                className="flex items-center gap-1.5 bg-yellow-500/10 hover:bg-yellow-500/20 text-yellow-400 border border-yellow-500/20 px-4 py-2 rounded text-sm font-medium transition-colors disabled:opacity-50">
+                {bulkUpdateLoading ? <Loader2 size={15} className="animate-spin" /> : <ArrowUpCircle size={15} />}
+                Update Outdated
+              </button>
+            )}
+            <button onClick={() => setShowModal(true)}
+              className="flex items-center gap-1.5 bg-[#0ea5e9] hover:bg-[#0284c7] text-white px-4 py-2 rounded text-sm font-medium transition-colors">
+              <Plus size={15} />
+              Add Node
+            </button>
+          </div>
         </div>
+
+        {bulkUpdateMsg && (
+          <div className="mb-4 text-xs px-3 py-2 rounded border bg-[#1a1d27] border-[#2a2d3e] text-[#94a3b8]">
+            {bulkUpdateMsg}
+          </div>
+        )}
 
         {nodes.length === 0 ? (
           <div className="text-[#64748b] text-sm">No nodes yet. Add your first VPS.</div>

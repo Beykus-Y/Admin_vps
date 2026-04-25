@@ -182,6 +182,9 @@ EOF
   fi
   ok "JWT_SECRET generated → ${ENV_FILE}"
 fi
+if ! grep -q '^AGENT_AUTO_UPDATE_ENABLED=' "${ENV_FILE}" 2>/dev/null; then
+  printf '\nAGENT_AUTO_UPDATE_ENABLED=false\n' >> "${ENV_FILE}"
+fi
 chmod 600 "${ENV_FILE}"
 
 # Write Compose override depending on proxy situation

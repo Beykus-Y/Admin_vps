@@ -46,6 +46,7 @@ export const api = {
     createEnrollToken: (id: string) => request<EnrollToken>(`/nodes/${id}/enroll-token`, { method: "POST" }),
     containers: (id: string) => request<Container[]>(`/nodes/${id}/containers`),
     ports: (id: string) => request<Port[]>(`/nodes/${id}/ports`),
+    metricsLatest: (id: string) => request<NodeMetric | null>(`/nodes/${id}/metrics/latest`),
     tasks: (id: string) => request<Task[]>(`/nodes/${id}/tasks`),
     createTask: (id: string, type: string, payload: Record<string, unknown>) =>
       request<Task>(`/nodes/${id}/tasks`, { method: "POST", body: JSON.stringify({ type, payload }) }),
@@ -54,6 +55,8 @@ export const api = {
       request<void>(`/nodes/${nodeId}/ports/${portId}/expected?expected=${expected}`, { method: "PATCH" }),
     updateAgent: (id: string) =>
       request<Task>(`/nodes/${id}/update-agent`, { method: "POST" }),
+    updateOutdatedAgents: () =>
+      request<Task[]>("/nodes/update-agents", { method: "POST" }),
   },
 };
 
@@ -65,6 +68,11 @@ export interface Node {
   public_ip: string | null;
   os: string | null;
   arch: string | null;
+  uptime_seconds: number | null;
+  kernel: string | null;
+  cpu_model: string | null;
+  cpu_cores: number | null;
+  local_ips: string[];
   provider: string | null;
   location: string | null;
   group_name: string | null;
@@ -77,6 +85,7 @@ export interface Node {
 export interface Overview {
   nodes: { total: number; online: number; offline: number; pending: number };
   containers: { total: number; running: number };
+  ports: { total: number; unexpected: number };
   recent_events: NodeEvent[];
 }
 
@@ -88,6 +97,8 @@ export interface Container {
   status: string | null;
   state: string | null;
   ports: string[];
+  networks: string[];
+  mounts: string[];
   cpu_percent: number | null;
   ram_mb: number | null;
   restart_count: number | null;
@@ -101,10 +112,28 @@ export interface Port {
   port: number;
   listen_ip: string | null;
   process_name: string | null;
+  pid: number | null;
+  user_name: string | null;
   container_name: string | null;
   is_expected: boolean;
+  status: "open" | "stale";
   first_seen_at: string | null;
   last_seen_at: string | null;
+}
+
+export interface NodeMetric {
+  id: string;
+  cpu_percent: number | null;
+  ram_used_mb: number | null;
+  ram_total_mb: number | null;
+  disk_used_gb: number | null;
+  disk_total_gb: number | null;
+  load_1: number | null;
+  load_5: number | null;
+  load_15: number | null;
+  network_rx_bytes: number | null;
+  network_tx_bytes: number | null;
+  created_at: string;
 }
 
 export interface Task {

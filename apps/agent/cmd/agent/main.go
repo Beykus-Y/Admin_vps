@@ -4,9 +4,13 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"os"
 	"runtime"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/filincontrol/agent/internal/client"
@@ -15,7 +19,7 @@ import (
 	"github.com/filincontrol/agent/internal/executor"
 )
 
-const version = "0.1.0"
+var version = "0.1.0"
 
 func main() {
 	configPath := flag.String("config", "/etc/filin-agent/config.yml", "path to config file")
@@ -35,6 +39,11 @@ func main() {
 
 	c := client.New(cfg.MasterURL, cfg.AgentToken)
 	log.Printf("filin-agent %s started, node=%s master=%s", version, cfg.NodeID, cfg.MasterURL)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		sendSnapshot(ctx, c)
+	}()
 
 	collectTick := time.NewTicker(time.Duration(cfg.CollectIntervalSeconds) * time.Second)
 	taskTick := time.NewTicker(time.Duration(cfg.TaskPollIntervalSeconds) * time.Second)
@@ -67,29 +76,87 @@ func main() {
 }
 
 func sendSnapshot(ctx context.Context, c *client.Client) {
+	inventoryErrors := []string{}
+	system, err := collector.CollectSystem(ctx)
+	if err != nil {
+		msg := fmt.Sprintf("System inventory unavailable: %v", err)
+		log.Print(msg)
+		inventoryErrors = append(inventoryErrors, msg)
+	}
+
 	metrics, err := collector.CollectMetrics(ctx)
 	if err != nil {
 		log.Printf("collect metrics: %v", err)
 	}
 
+	containersCollected := true
 	containers, err := collector.CollectContainers(ctx)
 	if err != nil {
-		log.Printf("collect containers: %v", err)
+		containers = []client.SnapshotContainer{}
+		containersCollected = false
+		msg := fmt.Sprintf("Docker inventory unavailable: %v", err)
+		log.Print(msg)
+		inventoryErrors = append(inventoryErrors, msg)
 	}
 
+	portsCollected := true
 	ports, err := collector.CollectPorts()
 	if err != nil {
-		log.Printf("collect ports: %v", err)
+		ports = []client.SnapshotPort{}
+		portsCollected = false
+		msg := fmt.Sprintf("Port inventory unavailable: %v", err)
+		log.Print(msg)
+		inventoryErrors = append(inventoryErrors, msg)
 	}
+	attachContainerNamesToPorts(ports, containers)
 
 	snap := client.SnapshotRequest{
-		Metrics:    metrics,
-		Containers: containers,
-		Ports:      ports,
+		System:              system,
+		Metrics:             metrics,
+		Containers:          containers,
+		Ports:               ports,
+		ContainersCollected: containersCollected,
+		PortsCollected:      portsCollected,
+		Errors:              inventoryErrors,
 	}
 	if err := c.Snapshot(ctx, snap); err != nil {
 		log.Printf("snapshot error: %v", err)
 	}
+}
+
+func attachContainerNamesToPorts(ports []client.SnapshotPort, containers []client.SnapshotContainer) {
+	published := map[string]string{}
+	for _, container := range containers {
+		for _, portMapping := range container.Ports {
+			proto, port, ok := parsePublishedPort(portMapping)
+			if ok {
+				published[fmt.Sprintf("%s/%d", proto, port)] = container.Name
+			}
+		}
+	}
+	for i := range ports {
+		key := fmt.Sprintf("%s/%d", ports[i].Protocol, ports[i].Port)
+		if name := published[key]; name != "" {
+			ports[i].ContainerName = name
+		}
+	}
+}
+
+func parsePublishedPort(value string) (proto string, port int, ok bool) {
+	parts := strings.Split(value, "/")
+	if len(parts) != 2 {
+		return "", 0, false
+	}
+	addressParts := strings.Split(parts[0], ":")
+	if len(addressParts) < 2 {
+		return "", 0, false
+	}
+	publishedPort := addressParts[len(addressParts)-2]
+	parsed, err := strconv.Atoi(publishedPort)
+	if err != nil {
+		return "", 0, false
+	}
+	return parts[1], parsed, true
 }
 
 func processTasks(ctx context.Context, c *client.Client) {
@@ -127,6 +194,7 @@ func runEnroll(masterURL, enrollToken, configPath string) {
 	resp, err := c.Enroll(ctx, client.EnrollRequest{
 		EnrollToken:  enrollToken,
 		Hostname:     hostname,
+		PublicIP:     detectPublicIP(ctx),
 		OS:           detectOS(),
 		Arch:         runtime.GOARCH,
 		AgentVersion: version,
@@ -157,6 +225,27 @@ func runEnroll(masterURL, enrollToken, configPath string) {
 	}
 
 	fmt.Printf("Enrolled successfully! Node ID: %s\nConfig saved to %s\n", resp.NodeID, configPath)
+}
+
+func detectPublicIP(ctx context.Context) string {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.ipify.org", nil)
+	if err != nil {
+		return ""
+	}
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return ""
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(body))
 }
 
 func detectOS() string {

@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { useRouter, useParams } from "next/navigation";
 import Layout from "@/components/Layout";
-import { api, Node, Container, Port, Task, NodeEvent, VersionInfo, isAgentOutdated } from "@/lib/api";
+import { api, Node, Container, Port, Task, NodeEvent, VersionInfo, NodeMetric, isAgentOutdated } from "@/lib/api";
 import { Circle, RefreshCw, Square, Play, CheckCircle, ArrowUpCircle, Loader2, AlertTriangle } from "lucide-react";
 
 type Tab = "overview" | "docker" | "ports" | "tasks" | "events";
@@ -28,6 +28,28 @@ function MetricBar({ label, used, total, unit }: { label: string; used: number; 
   );
 }
 
+function formatUptime(seconds: number | null) {
+  if (!seconds) return null;
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
+}
+
+function formatBytes(bytes: number | null) {
+  if (bytes == null) return "-";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let value = bytes;
+  let idx = 0;
+  while (value >= 1024 && idx < units.length - 1) {
+    value /= 1024;
+    idx += 1;
+  }
+  return `${value.toFixed(idx === 0 ? 0 : 1)}${units[idx]}`;
+}
+
 export default function NodeDetailPage() {
   const router = useRouter();
   const params = useParams();
@@ -36,6 +58,7 @@ export default function NodeDetailPage() {
   const [node, setNode] = useState<Node | null>(null);
   const [containers, setContainers] = useState<Container[]>([]);
   const [ports, setPorts] = useState<Port[]>([]);
+  const [metrics, setMetrics] = useState<NodeMetric | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [events, setEvents] = useState<NodeEvent[]>([]);
   const [tab, setTab] = useState<Tab>("overview");
@@ -48,15 +71,16 @@ export default function NodeDetailPage() {
     const token = localStorage.getItem("token");
     if (!token) { router.push("/login"); return; }
     try {
-      const [n, c, p, t, e, vi] = await Promise.all([
+      const [n, c, p, m, t, e, vi] = await Promise.all([
         api.nodes.get(id),
         api.nodes.containers(id),
         api.nodes.ports(id),
+        api.nodes.metricsLatest(id),
         api.nodes.tasks(id),
         api.nodes.events(id),
         api.version().catch(() => null as VersionInfo | null),
       ]);
-      setNode(n); setContainers(c); setPorts(p); setTasks(t); setEvents(e);
+      setNode(n); setContainers(c); setPorts(p); setMetrics(m); setTasks(t); setEvents(e);
       if (vi) setVersionInfo(vi);
     } catch {
       router.push("/login");
@@ -92,6 +116,9 @@ export default function NodeDetailPage() {
   if (!node) return <Layout><div className="p-8 text-[#64748b]">Loading...</div></Layout>;
 
   const tabs: Tab[] = ["overview", "docker", "ports", "tasks", "events"];
+  const runningContainers = containers.filter((c) => c.state === "running").length;
+  const openPorts = ports.filter((p) => p.status === "open").length;
+  const unexpectedOpenPorts = ports.filter((p) => p.status === "open" && !p.is_expected).length;
 
   return (
     <Layout>
@@ -166,15 +193,53 @@ export default function NodeDetailPage() {
                 ["Hostname", node.hostname],
                 ["OS", node.os],
                 ["Arch", node.arch],
+                ["Kernel", node.kernel],
+                ["CPU", node.cpu_model],
+                ["CPU Cores", node.cpu_cores],
+                ["Uptime", formatUptime(node.uptime_seconds)],
+                ["Local IPs", node.local_ips?.length ? node.local_ips.join(", ") : null],
                 ["Provider", node.provider],
                 ["Location", node.location],
                 ["Agent Version", node.agent_version],
               ].map(([k, v]) => v ? (
                 <div key={k} className="flex justify-between text-sm">
                   <span className="text-[#64748b]">{k}</span>
-                  <span className="text-white">{v}</span>
+                  <span className="text-white text-right ml-4 break-all">{v}</span>
                 </div>
               ) : null)}
+            </div>
+            <div className="bg-[#1a1d27] border border-[#2a2d3e] rounded-lg p-5 space-y-4">
+              <h3 className="text-xs font-semibold text-[#64748b] uppercase tracking-wider">Live Metrics</h3>
+              {metrics ? (
+                <>
+                  {metrics.cpu_percent != null && (
+                    <MetricBar label="CPU" used={Number(metrics.cpu_percent.toFixed(1))} total={100} unit="%" />
+                  )}
+                  {metrics.ram_used_mb != null && metrics.ram_total_mb != null && (
+                    <MetricBar label="RAM" used={metrics.ram_used_mb} total={metrics.ram_total_mb} unit="MB" />
+                  )}
+                  {metrics.disk_used_gb != null && metrics.disk_total_gb != null && (
+                    <MetricBar label="Disk" used={Number(metrics.disk_used_gb.toFixed(1))} total={Number(metrics.disk_total_gb.toFixed(1))} unit="GB" />
+                  )}
+                  <div className="grid grid-cols-2 gap-3 pt-1 text-xs text-[#64748b]">
+                    <div>Load: <span className="text-white">{[metrics.load_1, metrics.load_5, metrics.load_15].filter((v) => v != null).map((v) => v!.toFixed(2)).join(" / ") || "-"}</span></div>
+                    <div>Updated: <span className="text-white">{new Date(metrics.created_at).toLocaleTimeString()}</span></div>
+                    <div>RX: <span className="text-white">{formatBytes(metrics.network_rx_bytes)}</span></div>
+                    <div>TX: <span className="text-white">{formatBytes(metrics.network_tx_bytes)}</span></div>
+                  </div>
+                </>
+              ) : (
+                <p className="text-[#64748b] text-sm">No metrics received yet.</p>
+              )}
+            </div>
+            <div className="bg-[#1a1d27] border border-[#2a2d3e] rounded-lg p-5 md:col-span-2">
+              <h3 className="text-xs font-semibold text-[#64748b] uppercase tracking-wider mb-3">Inventory Summary</h3>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                <div className="bg-[#0f1117] rounded p-3"><div className="text-[#64748b] text-xs">Containers</div><div className="text-white font-semibold">{containers.length}</div></div>
+                <div className="bg-[#0f1117] rounded p-3"><div className="text-[#64748b] text-xs">Running</div><div className="text-white font-semibold">{runningContainers}</div></div>
+                <div className="bg-[#0f1117] rounded p-3"><div className="text-[#64748b] text-xs">Open Ports</div><div className="text-white font-semibold">{openPorts}</div></div>
+                <div className="bg-[#0f1117] rounded p-3"><div className="text-[#64748b] text-xs">Unexpected</div><div className="text-yellow-400 font-semibold">{unexpectedOpenPorts}</div></div>
+              </div>
             </div>
           </div>
         )}
@@ -192,8 +257,17 @@ export default function NodeDetailPage() {
                       <div className="min-w-0">
                         <div className="text-sm text-white font-medium truncate">{c.name}</div>
                         <div className="text-xs text-[#64748b] truncate">{c.image}</div>
+                        {c.ports.length > 0 && (
+                          <div className="text-[11px] text-[#94a3b8] truncate mt-0.5">{c.ports.join(", ")}</div>
+                        )}
                       </div>
                     </div>
+                    {c.health_status && (
+                      <div className="text-xs text-[#64748b] hidden lg:block">Health: <span className="text-white">{c.health_status}</span></div>
+                    )}
+                    {c.restart_count != null && (
+                      <div className="text-xs text-[#64748b] hidden lg:block">Restarts: <span className="text-white">{c.restart_count}</span></div>
+                    )}
                     {c.cpu_percent != null && (
                       <div className="text-xs text-[#64748b] hidden md:block">CPU: <span className="text-white">{c.cpu_percent.toFixed(1)}%</span></div>
                     )}
@@ -232,7 +306,7 @@ export default function NodeDetailPage() {
             {ports.length === 0 ? (
               <p className="text-[#64748b] text-sm">No open ports found.</p>
             ) : (
-              <div className="bg-[#1a1d27] border border-[#2a2d3e] rounded-lg overflow-hidden">
+              <div className="bg-[#1a1d27] border border-[#2a2d3e] rounded-lg overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-[#2a2d3e] text-[#64748b] text-xs uppercase">
@@ -240,8 +314,10 @@ export default function NodeDetailPage() {
                       <th className="text-left p-3">Proto</th>
                       <th className="text-left p-3">Listen IP</th>
                       <th className="text-left p-3">Process</th>
+                      <th className="text-left p-3">PID/User</th>
                       <th className="text-left p-3">Container</th>
-                      <th className="text-left p-3">Status</th>
+                      <th className="text-left p-3">State</th>
+                      <th className="text-left p-3">Expected</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[#2a2d3e]">
@@ -251,7 +327,13 @@ export default function NodeDetailPage() {
                         <td className="p-3 text-[#64748b]">{p.protocol}</td>
                         <td className="p-3 text-[#64748b] font-mono">{p.listen_ip ?? "0.0.0.0"}</td>
                         <td className="p-3 text-white">{p.process_name ?? "-"}</td>
+                        <td className="p-3 text-[#64748b] font-mono">{p.pid ? `${p.pid}${p.user_name ? `/${p.user_name}` : ""}` : "-"}</td>
                         <td className="p-3 text-[#64748b]">{p.container_name ?? "-"}</td>
+                        <td className="p-3">
+                          <span className={`text-xs px-2 py-0.5 rounded ${p.status === "open" ? "bg-green-500/10 text-green-400" : "bg-[#2a2d3e] text-[#64748b]"}`}>
+                            {p.status}
+                          </span>
+                        </td>
                         <td className="p-3">
                           {p.is_expected ? (
                             <span className="flex items-center gap-1 text-green-400 text-xs"><CheckCircle size={12} />expected</span>

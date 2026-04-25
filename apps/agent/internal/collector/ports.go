@@ -13,7 +13,7 @@ import (
 
 // CollectPorts parses `ss -tulpn` output on Linux.
 func CollectPorts() ([]agentclient.SnapshotPort, error) {
-	out, err := exec.Command("ss", "-tulpn").Output()
+	out, err := exec.Command("ss", "-H", "-tulpn").Output()
 	if err != nil {
 		return nil, fmt.Errorf("ss failed: %w", err)
 	}
@@ -21,7 +21,7 @@ func CollectPorts() ([]agentclient.SnapshotPort, error) {
 }
 
 func parseSSOutput(data []byte) []agentclient.SnapshotPort {
-	var ports []agentclient.SnapshotPort
+	ports := []agentclient.SnapshotPort{}
 	scanner := bufio.NewScanner(bytes.NewReader(data))
 	for scanner.Scan() {
 		line := scanner.Text()

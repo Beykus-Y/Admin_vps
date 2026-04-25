@@ -115,6 +115,18 @@ type SnapshotMetrics struct {
 	NetworkTXBytes int64   `json:"network_tx_bytes"`
 }
 
+type SnapshotSystem struct {
+	Hostname      string   `json:"hostname,omitempty"`
+	PublicIP      string   `json:"public_ip,omitempty"`
+	OS            string   `json:"os,omitempty"`
+	Arch          string   `json:"arch,omitempty"`
+	UptimeSeconds int64    `json:"uptime_seconds,omitempty"`
+	Kernel        string   `json:"kernel,omitempty"`
+	CPUModel      string   `json:"cpu_model,omitempty"`
+	CPUCores      int      `json:"cpu_cores,omitempty"`
+	LocalIPs      []string `json:"local_ips"`
+}
+
 type SnapshotContainer struct {
 	ContainerID  string            `json:"container_id"`
 	Name         string            `json:"name"`
@@ -142,9 +154,13 @@ type SnapshotPort struct {
 }
 
 type SnapshotRequest struct {
-	Metrics    *SnapshotMetrics    `json:"metrics,omitempty"`
-	Containers []SnapshotContainer `json:"containers"`
-	Ports      []SnapshotPort      `json:"ports"`
+	System              *SnapshotSystem      `json:"system,omitempty"`
+	Metrics             *SnapshotMetrics     `json:"metrics,omitempty"`
+	Containers          []SnapshotContainer  `json:"containers"`
+	Ports               []SnapshotPort       `json:"ports"`
+	ContainersCollected bool                 `json:"containers_collected"`
+	PortsCollected      bool                 `json:"ports_collected"`
+	Errors              []string             `json:"errors"`
 }
 
 func (c *Client) Snapshot(ctx context.Context, snap SnapshotRequest) error {
