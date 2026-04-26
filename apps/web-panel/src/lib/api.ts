@@ -409,6 +409,48 @@ export interface SubProxySettings {
   sub_update_interval: number | null;
 }
 
+export interface SubProxyInbound {
+  tag: string;
+  protocol?: string;
+  network?: string;
+  tls?: string;
+  port?: number | string;
+}
+
+export type SubProxyInbounds = Record<string, SubProxyInbound[]>;
+
+export interface SubProxyUserCreatePayload {
+  username: string;
+  note?: string | null;
+  data_limit?: number | null;
+  expire?: number | null;
+  data_limit_reset_strategy?: "no_reset" | "day" | "week" | "month" | "year";
+  status?: "active" | "on_hold";
+  proxies: Record<string, Record<string, unknown>>;
+  inbounds: Record<string, string[]>;
+}
+
+export interface SubProxyUserRenewPayload {
+  add_days?: number | null;
+  expire?: number | null;
+  data_limit?: number | null;
+  status?: "active" | "disabled" | "on_hold" | null;
+}
+
+export interface SubProxyConnectionSettings {
+  base_url: string;
+  hmac_secret_set: boolean;
+  timeout_seconds: number;
+  source: "database" | "environment";
+}
+
+export interface SubProxyConnectionSettingsUpdate {
+  base_url: string;
+  hmac_secret?: string | null;
+  clear_hmac_secret?: boolean;
+  timeout_seconds: number;
+}
+
 export const api = {
   login: (username: string, password: string) =>
     request<TokenResponse>("/auth/login", {
@@ -463,10 +505,17 @@ export const api = {
   },
   subProxy: {
     status: () => request<SubProxyStatus>("/subproxy/status"),
+    inbounds: () => request<SubProxyInbounds>("/subproxy/inbounds"),
     users: (params: { limit?: number; offset?: number } = {}) =>
       request<SubProxyUsersResponse>(`/subproxy/users${buildQuery(params)}`),
     userDetails: (username: string) =>
       request<SubProxyUserDetails>(`/subproxy/users/${encodeURIComponent(username)}`),
+    createUser: (payload: SubProxyUserCreatePayload) =>
+      request<SubProxyUserRecord>("/subproxy/users", { method: "POST", body: JSON.stringify(payload) }),
+    renewUser: (username: string, payload: SubProxyUserRenewPayload) =>
+      request<SubProxyUserRecord>(`/subproxy/users/${encodeURIComponent(username)}/renew`, { method: "POST", body: JSON.stringify(payload) }),
+    deleteUser: (username: string) =>
+      request<void>(`/subproxy/users/${encodeURIComponent(username)}`, { method: "DELETE" }),
     configs: () => request<SubProxyStoredConfig[]>("/subproxy/configs"),
     createConfig: (payload: { name?: string | null; uri: string; enabled: boolean }) =>
       request<{ ok: boolean }>("/subproxy/configs", { method: "POST", body: JSON.stringify(payload) }),
@@ -483,6 +532,14 @@ export const api = {
     settings: () => request<SubProxySettings>("/subproxy/settings"),
     saveSettings: (payload: SubProxySettings) =>
       request<{ ok: boolean }>("/subproxy/settings", { method: "POST", body: JSON.stringify(payload) }),
+  },
+
+  settings: {
+    subProxy: () => request<SubProxyConnectionSettings>("/settings/sub-proxy"),
+    saveSubProxy: (payload: SubProxyConnectionSettingsUpdate) =>
+      request<SubProxyConnectionSettings>("/settings/sub-proxy", { method: "PUT", body: JSON.stringify(payload) }),
+    testSubProxy: () =>
+      request<{ ok: boolean; status: SubProxyStatus }>("/settings/sub-proxy/test", { method: "POST" }),
   },
 
   nodes: {

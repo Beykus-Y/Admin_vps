@@ -9,7 +9,7 @@ from urllib.parse import urlencode
 
 import httpx
 
-from app.core.config import settings
+from app.services.app_settings import get_sub_proxy_runtime_settings
 
 
 class SubProxyClientError(Exception):
@@ -40,7 +40,7 @@ def _build_query(params: dict | None) -> str:
     return f"?{query}" if query else ""
 
 
-def _build_signature(method: str, path: str, timestamp: str, nonce: str, body: bytes) -> str:
+def _build_signature(method: str, path: str, timestamp: str, nonce: str, body: bytes, secret: str) -> str:
     payload = "\n".join([
         method.upper(),
         path,
@@ -48,16 +48,17 @@ def _build_signature(method: str, path: str, timestamp: str, nonce: str, body: b
         nonce,
         hashlib.sha256(body).hexdigest(),
     ])
-    return hmac.new(settings.sub_proxy_hmac_secret.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
+    return hmac.new(secret.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
-def ensure_sub_proxy_configured():
-    if not settings.sub_proxy_base_url or not settings.sub_proxy_hmac_secret:
+def ensure_sub_proxy_configured(runtime_settings):
+    if not runtime_settings.base_url or not runtime_settings.hmac_secret:
         raise SubProxyClientError(503, "Sub Proxy integration is not configured")
 
 
-async def request_sub_proxy(method: str, path: str, *, params: dict | None = None, payload=None):
-    ensure_sub_proxy_configured()
+async def request_sub_proxy(method: str, path: str, *, db, params: dict | None = None, payload=None):
+    runtime_settings = await get_sub_proxy_runtime_settings(db)
+    ensure_sub_proxy_configured(runtime_settings)
 
     request_path = f"/internal/v1{path}{_build_query(params)}"
     body = _canonical_json_bytes(payload) if payload is not None else b""
@@ -67,15 +68,15 @@ async def request_sub_proxy(method: str, path: str, *, params: dict | None = Non
     headers = {
         "X-Filin-Timestamp": timestamp,
         "X-Filin-Nonce": nonce,
-        "X-Filin-Signature": _build_signature(method, request_path, timestamp, nonce, body),
+        "X-Filin-Signature": _build_signature(method, request_path, timestamp, nonce, body, runtime_settings.hmac_secret),
     }
     if body:
         headers["Content-Type"] = "application/json; charset=utf-8"
 
     try:
         async with httpx.AsyncClient(
-            base_url=settings.sub_proxy_base_url.rstrip("/"),
-            timeout=settings.sub_proxy_timeout_seconds,
+            base_url=runtime_settings.base_url.rstrip("/"),
+            timeout=runtime_settings.timeout_seconds,
         ) as client:
             response = await client.request(method.upper(), request_path, headers=headers, content=body)
     except httpx.RequestError as exc:

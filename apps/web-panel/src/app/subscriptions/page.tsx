@@ -6,6 +6,7 @@ import clsx from "clsx";
 import {
   ChevronDown,
   ChevronUp,
+  CalendarPlus,
   Clock3,
   Database,
   Loader2,
@@ -18,6 +19,8 @@ import {
   Settings2,
   ShieldCheck,
   Trash2,
+  UserPlus,
+  X,
   type LucideIcon,
 } from "lucide-react";
 import Layout from "@/components/Layout";
@@ -25,6 +28,7 @@ import { Card, Pill, SearchBar, SectionTitle, SoftButton, StatCard } from "@/com
 import {
   api,
   SubProxyNamedConfig,
+  SubProxyInbounds,
   SubProxyNodeFilter,
   SubProxySettings,
   SubProxyStatus,
@@ -83,6 +87,19 @@ function unixToIso(value: number | null | undefined): string | null {
 function limitLabel(bytes: number | null | undefined): string {
   if (!bytes) return "∞";
   return formatBytes(bytes);
+}
+
+function gbInputToBytes(value: string): number | null {
+  const parsed = Number.parseFloat(value.replace(",", "."));
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return Math.round(parsed * 1024 * 1024 * 1024);
+}
+
+function dateInputToUnix(value: string): number | null {
+  if (!value) return null;
+  const date = new Date(`${value}T23:59:59`);
+  if (Number.isNaN(date.getTime())) return null;
+  return Math.floor(date.getTime() / 1000);
 }
 
 function expiryBadge(expire: number | null | undefined) {
@@ -219,6 +236,7 @@ export default function SubscriptionsPage() {
   const [status, setStatus] = useState<SubProxyStatus | null>(null);
   const [users, setUsers] = useState<SubProxyUserSummary[]>([]);
   const [globalConfigs, setGlobalConfigs] = useState<SubProxyStoredConfig[]>([]);
+  const [inbounds, setInbounds] = useState<SubProxyInbounds>({});
   const [perUserConfigsMap, setPerUserConfigsMap] = useState<Record<string, SubProxyNamedConfig[]>>({});
   const [nodeFilters, setNodeFilters] = useState<Record<string, SubProxyNodeFilter>>({});
   const [settings, setSettings] = useState<SubProxySettings>({ sub_update_interval: null });
@@ -237,8 +255,20 @@ export default function SubscriptionsPage() {
   const [detailsError, setDetailsError] = useState("");
   const [savingFilters, setSavingFilters] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
+  const [savingUserAction, setSavingUserAction] = useState(false);
+  const [inboundsLoading, setInboundsLoading] = useState(false);
   const [savingGlobalConfig, setSavingGlobalConfig] = useState(false);
   const [savingPerUserConfig, setSavingPerUserConfig] = useState(false);
+  const [createUserOpen, setCreateUserOpen] = useState(false);
+  const [renewUserOpen, setRenewUserOpen] = useState(false);
+  const [newUsername, setNewUsername] = useState("");
+  const [newUserNote, setNewUserNote] = useState("");
+  const [newUserLimitGb, setNewUserLimitGb] = useState("");
+  const [newUserExpireDate, setNewUserExpireDate] = useState("");
+  const [inboundSelection, setInboundSelection] = useState<Record<string, boolean>>({});
+  const [renewDays, setRenewDays] = useState("30");
+  const [renewLimitGb, setRenewLimitGb] = useState("");
+  const [renewActivate, setRenewActivate] = useState(true);
   const [newGlobalName, setNewGlobalName] = useState("");
   const [newGlobalUri, setNewGlobalUri] = useState("");
   const [newGlobalEnabled, setNewGlobalEnabled] = useState(true);
@@ -366,6 +396,142 @@ export default function SubscriptionsPage() {
   async function refreshAll() {
     await loadAll(false);
     if (selectedUsername) await loadUserDetails(selectedUsername);
+  }
+
+  function inboundKey(protocol: string, tag: string) {
+    return `${protocol}::${tag}`;
+  }
+
+  async function ensureInbounds() {
+    if (Object.keys(inbounds).length > 0) return inbounds;
+    setInboundsLoading(true);
+    try {
+      const data = await api.subProxy.inbounds();
+      setInbounds(data);
+      const nextSelection: Record<string, boolean> = {};
+      Object.entries(data).forEach(([protocol, items]) => {
+        items.forEach((item) => {
+          nextSelection[inboundKey(protocol, item.tag)] = true;
+        });
+      });
+      setInboundSelection(nextSelection);
+      return data;
+    } catch (err: unknown) {
+      showError(err instanceof Error ? err.message : "Не удалось загрузить inbounds");
+      return {};
+    } finally {
+      setInboundsLoading(false);
+    }
+  }
+
+  async function openCreateUser() {
+    setCreateUserOpen(true);
+    await ensureInbounds();
+  }
+
+  function selectedInboundsPayload() {
+    const selected: Record<string, string[]> = {};
+    Object.entries(inbounds).forEach(([protocol, items]) => {
+      items.forEach((item) => {
+        if (inboundSelection[inboundKey(protocol, item.tag)]) {
+          selected[protocol] = [...(selected[protocol] ?? []), item.tag];
+        }
+      });
+    });
+    return selected;
+  }
+
+  async function createSubscriptionUser() {
+    const username = newUsername.trim();
+    if (!username) {
+      showError("Username обязателен");
+      return;
+    }
+    const selectedInbounds = selectedInboundsPayload();
+    if (Object.keys(selectedInbounds).length === 0) {
+      showError("Выбери хотя бы один inbound");
+      return;
+    }
+
+    const proxies = Object.fromEntries(Object.keys(selectedInbounds).map((protocol) => [protocol, {}]));
+    setSavingUserAction(true);
+    try {
+      await api.subProxy.createUser({
+        username,
+        note: newUserNote.trim() || null,
+        data_limit: gbInputToBytes(newUserLimitGb),
+        expire: dateInputToUnix(newUserExpireDate),
+        data_limit_reset_strategy: "no_reset",
+        status: "active",
+        proxies,
+        inbounds: selectedInbounds,
+      });
+      setCreateUserOpen(false);
+      setNewUsername("");
+      setNewUserNote("");
+      setNewUserLimitGb("");
+      setNewUserExpireDate("");
+      setSelectedUsername(username);
+      showSuccess(`Подписка ${username} создана`);
+      await loadAll(false);
+      await loadUserDetails(username);
+    } catch (err: unknown) {
+      showError(err instanceof Error ? err.message : "Не удалось создать подписку");
+    } finally {
+      setSavingUserAction(false);
+    }
+  }
+
+  async function renewSubscriptionUser() {
+    if (!selectedUsername) return;
+    const parsedDays = renewDays.trim() ? Number.parseInt(renewDays.trim(), 10) : null;
+    if (parsedDays != null && (Number.isNaN(parsedDays) || parsedDays < 1 || parsedDays > 3650)) {
+      showError("Срок продления должен быть от 1 до 3650 дней");
+      return;
+    }
+    const dataLimit = gbInputToBytes(renewLimitGb);
+    if (parsedDays == null && dataLimit == null && !renewActivate) {
+      showError("Нет изменений для продления");
+      return;
+    }
+
+    setSavingUserAction(true);
+    try {
+      await api.subProxy.renewUser(selectedUsername, {
+        add_days: parsedDays,
+        data_limit: dataLimit,
+        status: renewActivate ? "active" : null,
+      });
+      setRenewUserOpen(false);
+      setRenewDays("30");
+      setRenewLimitGb("");
+      setRenewActivate(true);
+      showSuccess(`Подписка ${selectedUsername} продлена`);
+      await loadAll(false);
+      await loadUserDetails(selectedUsername);
+    } catch (err: unknown) {
+      showError(err instanceof Error ? err.message : "Не удалось продлить подписку");
+    } finally {
+      setSavingUserAction(false);
+    }
+  }
+
+  async function deleteSubscriptionUser() {
+    if (!selectedUsername) return;
+    if (!window.confirm(`Удалить подписку "${selectedUsername}"?`)) return;
+
+    setSavingUserAction(true);
+    try {
+      await api.subProxy.deleteUser(selectedUsername);
+      showSuccess(`Подписка ${selectedUsername} удалена`);
+      setSelectedUsername("");
+      setSelectedDetails(null);
+      await loadAll(false);
+    } catch (err: unknown) {
+      showError(err instanceof Error ? err.message : "Не удалось удалить подписку");
+    } finally {
+      setSavingUserAction(false);
+    }
   }
 
   async function mutatePerUserConfigs(nextMap: Record<string, SubProxyNamedConfig[]>, successMessage: string) {
@@ -644,6 +810,12 @@ export default function SubscriptionsPage() {
           </div>
           <div className="flex flex-col gap-2 sm:flex-row xl:ml-auto">
             <SearchBar value={search} onChange={setSearch} placeholder="Поиск по username, заметке, клиенту..." className="sm:w-96" />
+            {canEdit && (
+              <SoftButton onClick={openCreateUser} disabled={savingUserAction} variant="primary">
+                <UserPlus size={15} />
+                Создать
+              </SoftButton>
+            )}
             <SoftButton onClick={refreshAll} disabled={refreshing} variant="blue">
               {refreshing ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />}
               Обновить
@@ -729,6 +901,18 @@ export default function SubscriptionsPage() {
                     </div>
                   )}
                 </div>
+                {canEdit && selectedDetails && (
+                  <div className="flex shrink-0 flex-wrap gap-2">
+                    <SoftButton onClick={() => setRenewUserOpen(true)} disabled={savingUserAction} variant="yellow">
+                      <CalendarPlus size={15} />
+                      Продлить
+                    </SoftButton>
+                    <SoftButton onClick={deleteSubscriptionUser} disabled={savingUserAction} variant="danger">
+                      <Trash2 size={15} />
+                      Удалить
+                    </SoftButton>
+                  </div>
+                )}
               </div>
 
               {detailsLoading ? (
@@ -1019,6 +1203,129 @@ export default function SubscriptionsPage() {
             </div>
           </div>
         </div>
+
+        {createUserOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+            <div className="max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-lg border border-[#1d2135] bg-[#111420] shadow-[0_24px_80px_rgba(0,0,0,0.45)]">
+              <div className="flex items-center justify-between border-b border-[#1a1d2e] px-4 py-3">
+                <div>
+                  <div className="text-sm font-semibold text-[#e8eaf6]">Новая подписка</div>
+                  <div className="mt-1 font-mono text-[10px] uppercase tracking-[0.14em] text-[#2a3355]">Marzban user</div>
+                </div>
+                <button onClick={() => setCreateUserOpen(false)} className="rounded border border-[#1d2135] p-2 text-[#4a5170] hover:text-[#dde2f0]">
+                  <X size={15} />
+                </button>
+              </div>
+
+              <div className="space-y-4 p-4">
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                  <Field label="Username">
+                    <TextInput value={newUsername} onChange={setNewUsername} placeholder="client_001" disabled={savingUserAction} />
+                  </Field>
+                  <Field label="Лимит, ГБ">
+                    <TextInput value={newUserLimitGb} onChange={setNewUserLimitGb} placeholder="0 = без лимита" type="number" disabled={savingUserAction} />
+                  </Field>
+                  <Field label="Истекает">
+                    <TextInput value={newUserExpireDate} onChange={setNewUserExpireDate} type="date" disabled={savingUserAction} />
+                  </Field>
+                  <Field label="Заметка">
+                    <TextInput value={newUserNote} onChange={setNewUserNote} placeholder="комментарий" disabled={savingUserAction} />
+                  </Field>
+                </div>
+
+                <div>
+                  <SectionTitle>Inbounds</SectionTitle>
+                  <div className="rounded-lg border border-[#1a1d2e] bg-[#0c0e16] p-4">
+                    {inboundsLoading ? (
+                      <div className="flex items-center gap-2 font-mono text-xs text-[#4a5170]">
+                        <Loader2 size={14} className="animate-spin" />
+                        Загружаю inbounds...
+                      </div>
+                    ) : Object.keys(inbounds).length === 0 ? (
+                      <div className="font-mono text-xs text-[#2a3355]">Inbounds не найдены</div>
+                    ) : (
+                      <div className="grid gap-3 lg:grid-cols-2">
+                        {Object.entries(inbounds).map(([protocol, items]) => (
+                          <div key={protocol} className="rounded-lg border border-[#1a1d2e] bg-[#111420] p-3">
+                            <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.14em] text-[#4a5170]">{protocol}</div>
+                            <div className="grid gap-2">
+                              {items.map((item) => {
+                                const key = inboundKey(protocol, item.tag);
+                                return (
+                                  <label key={key} className="flex items-center gap-2 rounded-md bg-[#0c0e16] px-3 py-2 text-xs text-[#8892b0]">
+                                    <input
+                                      type="checkbox"
+                                      checked={Boolean(inboundSelection[key])}
+                                      onChange={(event) => setInboundSelection((current) => ({ ...current, [key]: event.target.checked }))}
+                                      className="h-4 w-4 rounded border-[#252a40] bg-[#111420] text-[#4ade80]"
+                                    />
+                                    <span className="truncate">{item.tag}</span>
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+                  <SoftButton onClick={() => setCreateUserOpen(false)} disabled={savingUserAction} variant="ghost">Отмена</SoftButton>
+                  <SoftButton onClick={createSubscriptionUser} disabled={savingUserAction || inboundsLoading} variant="primary">
+                    {savingUserAction ? <Loader2 size={15} className="animate-spin" /> : <UserPlus size={15} />}
+                    Создать
+                  </SoftButton>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {renewUserOpen && selectedDetails && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+            <div className="w-full max-w-xl rounded-lg border border-[#1d2135] bg-[#111420] shadow-[0_24px_80px_rgba(0,0,0,0.45)]">
+              <div className="flex items-center justify-between border-b border-[#1a1d2e] px-4 py-3">
+                <div>
+                  <div className="text-sm font-semibold text-[#e8eaf6]">Продлить {selectedUsername}</div>
+                  <div className="mt-1 font-mono text-[10px] uppercase tracking-[0.14em] text-[#2a3355]">
+                    текущий срок: {selectedDetails.user.expire ? formatDateTime(unixToIso(selectedDetails.user.expire)) : "без срока"}
+                  </div>
+                </div>
+                <button onClick={() => setRenewUserOpen(false)} className="rounded border border-[#1d2135] p-2 text-[#4a5170] hover:text-[#dde2f0]">
+                  <X size={15} />
+                </button>
+              </div>
+              <div className="space-y-4 p-4">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Field label="Добавить дней">
+                    <TextInput value={renewDays} onChange={setRenewDays} type="number" disabled={savingUserAction} />
+                  </Field>
+                  <Field label="Новый лимит, ГБ">
+                    <TextInput value={renewLimitGb} onChange={setRenewLimitGb} placeholder="пусто = не менять" type="number" disabled={savingUserAction} />
+                  </Field>
+                </div>
+                <label className="flex items-center gap-2 text-sm text-[#8892b0]">
+                  <input
+                    type="checkbox"
+                    checked={renewActivate}
+                    onChange={(event) => setRenewActivate(event.target.checked)}
+                    className="h-4 w-4 rounded border-[#252a40] bg-[#111420] text-[#4ade80]"
+                  />
+                  активировать пользователя
+                </label>
+                <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+                  <SoftButton onClick={() => setRenewUserOpen(false)} disabled={savingUserAction} variant="ghost">Отмена</SoftButton>
+                  <SoftButton onClick={renewSubscriptionUser} disabled={savingUserAction} variant="yellow">
+                    {savingUserAction ? <Loader2 size={15} className="animate-spin" /> : <CalendarPlus size={15} />}
+                    Продлить
+                  </SoftButton>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </Layout>
   );

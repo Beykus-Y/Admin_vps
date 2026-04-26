@@ -1,4 +1,5 @@
 from app.db.models.alert import AlertChannel, AlertIncident, AlertRule
+from app.db.models.app_setting import AppSetting
 from app.db.models.audit import AuditLog
 from app.db.models.node import Node, NodeCredential, NodeEnrollToken
 from app.db.models.metrics import NodeMetric
@@ -16,6 +17,7 @@ __all__ = [
     "AlertIncident",
     "AlertChannel",
     "AuditLog",
+    "AppSetting",
     "NodeMetric",
     "DockerContainer",
     "OpenPort",

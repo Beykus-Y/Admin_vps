@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { Activity, ArrowUpCircle, Bell, Box, FileClock, LayoutDashboard, Link2, Loader2, LogOut, RadioTower, Server } from "lucide-react";
+import { Activity, ArrowUpCircle, Bell, Box, FileClock, LayoutDashboard, Link2, Loader2, LogOut, RadioTower, Server, Settings } from "lucide-react";
 import clsx from "clsx";
 import { api, VersionInfo } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
@@ -18,6 +18,7 @@ const nav = [
   { href: "/events", label: "События", icon: Activity },
   { href: "/alerts", label: "Алерты", icon: Bell },
   { href: "/subscriptions", label: "Подписки", icon: Link2 },
+  { href: "/settings", label: "Настройки", icon: Settings, adminOnly: true },
   { href: "/audit", label: "Аудит", icon: FileClock, adminOnly: true },
 ];
 
