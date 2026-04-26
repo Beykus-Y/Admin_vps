@@ -26,6 +26,8 @@ DEFAULT_ALERT_RULES = {
         "severity": "critical",
         "enabled": True,
         "threshold": None,
+        "duration_seconds": 0,
+        "resolve_for_seconds": 0,
     },
     "cpu.high": {
         "name": "CPU > 90%",
@@ -33,6 +35,8 @@ DEFAULT_ALERT_RULES = {
         "severity": "warning",
         "enabled": True,
         "threshold": 90.0,
+        "duration_seconds": 120,
+        "resolve_for_seconds": 300,
     },
     "ram.high": {
         "name": "RAM > 85%",
@@ -40,6 +44,8 @@ DEFAULT_ALERT_RULES = {
         "severity": "warning",
         "enabled": True,
         "threshold": 85.0,
+        "duration_seconds": 120,
+        "resolve_for_seconds": 300,
     },
     "disk.high": {
         "name": "Диск > 80%",
@@ -47,6 +53,8 @@ DEFAULT_ALERT_RULES = {
         "severity": "warning",
         "enabled": False,
         "threshold": 80.0,
+        "duration_seconds": 0,
+        "resolve_for_seconds": 0,
     },
     "port.unexpected": {
         "name": "Новый открытый порт",
@@ -54,6 +62,8 @@ DEFAULT_ALERT_RULES = {
         "severity": "warning",
         "enabled": True,
         "threshold": 1.0,
+        "duration_seconds": 0,
+        "resolve_for_seconds": 0,
     },
     "container.down": {
         "name": "Контейнер остановлен",
@@ -61,6 +71,8 @@ DEFAULT_ALERT_RULES = {
         "severity": "warning",
         "enabled": True,
         "threshold": 1.0,
+        "duration_seconds": 60,
+        "resolve_for_seconds": 0,
     },
     "agent.outdated": {
         "name": "Агент устарел",
@@ -68,6 +80,8 @@ DEFAULT_ALERT_RULES = {
         "severity": "info",
         "enabled": False,
         "threshold": None,
+        "duration_seconds": 0,
+        "resolve_for_seconds": 0,
     },
 }
 
@@ -89,24 +103,24 @@ class NotificationEnvelope:
 async def ensure_default_alert_rules(db) -> None:
     result = await db.execute(select(AlertRule))
     existing = {rule.kind: rule for rule in result.scalars().all()}
-    created = False
+    changed = False
     for kind, default in DEFAULT_ALERT_RULES.items():
-        if kind in existing:
-            continue
-        db.add(
-            AlertRule(
-                name=default["name"],
-                kind=kind,
-                description=default["description"],
-                severity=default["severity"],
-                enabled=default["enabled"],
-                threshold=default["threshold"],
-                duration_seconds=0,
-                filters={},
+        if kind not in existing:
+            db.add(
+                AlertRule(
+                    name=default["name"],
+                    kind=kind,
+                    description=default["description"],
+                    severity=default["severity"],
+                    enabled=default["enabled"],
+                    threshold=default["threshold"],
+                    duration_seconds=default["duration_seconds"],
+                    resolve_for_seconds=default["resolve_for_seconds"],
+                    filters={},
+                )
             )
-        )
-        created = True
-    if created:
+            changed = True
+    if changed:
         await db.commit()
 
 
@@ -177,20 +191,52 @@ async def evaluate_rule(
             incident.last_seen_at = now
         return notifications
 
+    # ── condition is active ──────────────────────────────────────────────────
     if active:
         if incident:
+            # Condition became active again — clear any pending-resolve timer
             incident.message = message
             incident.current_value = current_value
-            incident.extra = extra or {}
+            incident.extra = extra or {}  # also clears _resolve_pending_since
             incident.last_seen_at = now
+
+            # Silenced expiry
             if incident.status == "silenced" and incident.silenced_until and incident.silenced_until <= now:
                 incident.status = "open"
                 incident.silenced_until = None
+
+            # Pending → open once duration_seconds has elapsed
+            if incident.status == "pending":
+                elapsed = (now - incident.started_at).total_seconds()
+                if rule.duration_seconds <= 0 or elapsed >= rule.duration_seconds:
+                    incident.status = "open"
+                    db.add(Event(
+                        node_id=node.id,
+                        severity=rule.severity,
+                        type=f"alert.{rule.kind}.opened",
+                        message=message,
+                        extra={"rule_kind": rule.kind, **(extra or {})},
+                    ))
+                    await db.flush()
+                    notifications.append(NotificationEnvelope(
+                        title=f"{rule.name}: open",
+                        message=message,
+                        severity=rule.severity,
+                        status="open",
+                        node_id=str(node.id),
+                        node_name=node.name,
+                        rule_kind=rule.kind,
+                        rule_name=rule.name,
+                        incident_id=str(incident.id),
+                        extra=extra or {},
+                    ))
         else:
+            # First time we see this condition — pending if duration > 0
+            initial_status = "pending" if rule.duration_seconds > 0 else "open"
             incident = AlertIncident(
                 rule_id=rule.id,
                 node_id=node.id,
-                status="open",
+                status=initial_status,
                 message=message,
                 current_value=current_value,
                 extra=extra or {},
@@ -198,18 +244,16 @@ async def evaluate_rule(
                 last_seen_at=now,
             )
             db.add(incident)
-            db.add(
-                Event(
+            if initial_status == "open":
+                db.add(Event(
                     node_id=node.id,
                     severity=rule.severity,
                     type=f"alert.{rule.kind}.opened",
                     message=message,
                     extra={"rule_kind": rule.kind, **(extra or {})},
-                )
-            )
-            await db.flush()
-            notifications.append(
-                NotificationEnvelope(
+                ))
+                await db.flush()
+                notifications.append(NotificationEnvelope(
                     title=f"{rule.name}: open",
                     message=message,
                     severity=rule.severity,
@@ -220,41 +264,64 @@ async def evaluate_rule(
                     rule_name=rule.name,
                     incident_id=str(incident.id),
                     extra=extra or {},
-                )
-            )
+                ))
         return notifications
 
+    # ── condition is inactive ────────────────────────────────────────────────
     if not incident:
         return notifications
 
+    # Silently cancel incidents that never opened (no notification was ever sent)
+    if incident.status == "pending":
+        incident.status = "resolved"
+        incident.resolved_at = now
+        incident.last_seen_at = now
+        return notifications
+
+    # Closing debounce: wait resolve_for_seconds before actually resolving
+    resolve_for = rule.resolve_for_seconds or 0
+    if resolve_for > 0:
+        inc_extra = dict(incident.extra or {})
+        if "_resolve_pending_since" not in inc_extra:
+            inc_extra["_resolve_pending_since"] = now.isoformat()
+            incident.extra = inc_extra
+            incident.current_value = current_value
+            incident.last_seen_at = now
+            return notifications
+        try:
+            pending_since = datetime.fromisoformat(inc_extra["_resolve_pending_since"])
+        except (ValueError, TypeError):
+            pending_since = now
+        if (now - pending_since).total_seconds() < resolve_for:
+            incident.current_value = current_value
+            incident.last_seen_at = now
+            return notifications
+
+    clean_extra = {k: v for k, v in (incident.extra or {}).items() if k != "_resolve_pending_since"}
     incident.status = "resolved"
     incident.resolved_at = now
     incident.last_seen_at = now
     incident.current_value = current_value
-    incident.extra = extra or {}
-    db.add(
-        Event(
-            node_id=node.id,
-            severity="info",
-            type=f"alert.{rule.kind}.resolved",
-            message=f"{rule.name}: resolved on {node.name}",
-            extra={"rule_kind": rule.kind, **(extra or {})},
-        )
-    )
-    notifications.append(
-        NotificationEnvelope(
-            title=f"{rule.name}: resolved",
-            message=f"{rule.name}: resolved on {node.name}",
-            severity=rule.severity,
-            status="resolved",
-            node_id=str(node.id),
-            node_name=node.name,
-            rule_kind=rule.kind,
-            rule_name=rule.name,
-            incident_id=str(incident.id),
-            extra=extra or {},
-        )
-    )
+    incident.extra = clean_extra
+    db.add(Event(
+        node_id=node.id,
+        severity="info",
+        type=f"alert.{rule.kind}.resolved",
+        message=f"{rule.name}: resolved on {node.name}",
+        extra={"rule_kind": rule.kind, **(extra or {})},
+    ))
+    notifications.append(NotificationEnvelope(
+        title=f"{rule.name}: resolved",
+        message=f"{rule.name}: resolved on {node.name}",
+        severity=rule.severity,
+        status="resolved",
+        node_id=str(node.id),
+        node_name=node.name,
+        rule_kind=rule.kind,
+        rule_name=rule.name,
+        incident_id=str(incident.id),
+        extra=clean_extra,
+    ))
     return notifications
 
 

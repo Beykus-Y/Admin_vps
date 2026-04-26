@@ -18,6 +18,7 @@ class AlertRule(UUIDMixin, TimestampMixin, UpdatedTimestampMixin, Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     threshold: Mapped[float | None] = mapped_column(Float)
     duration_seconds: Mapped[int] = mapped_column(Integer, default=0)
+    resolve_for_seconds: Mapped[int] = mapped_column(Integer, default=0)
     filters: Mapped[dict] = mapped_column(JSONB, default=dict)
 
 

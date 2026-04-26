@@ -13,6 +13,7 @@ class AlertRuleOut(BaseModel):
     enabled: bool
     threshold: float | None
     duration_seconds: int
+    resolve_for_seconds: int
     filters: dict
     created_at: datetime
     updated_at: datetime
@@ -27,6 +28,7 @@ class AlertRuleUpdate(BaseModel):
     enabled: bool | None = None
     threshold: float | None = None
     duration_seconds: int | None = None
+    resolve_for_seconds: int | None = None
     filters: dict | None = None
 
 
