@@ -292,6 +292,111 @@ export interface NodeDetails {
   events: NodeEvent[];
 }
 
+export interface SubProxyNode {
+  id: number | null;
+  name: string;
+  address: string;
+  port: number | null;
+  status: string;
+  xray_version: string | null;
+}
+
+export interface SubProxyStatus {
+  service: string;
+  marzban: {
+    reachable: boolean;
+    error?: string | null;
+  };
+  nodes: SubProxyNode[];
+  counts: {
+    global_configs: number;
+    global_enabled_configs: number;
+    per_user_config_users: number;
+    per_user_configs: number;
+    filtered_users: number;
+  };
+  settings: {
+    sub_update_interval: number | null;
+  };
+}
+
+export interface SubProxyUserSummary {
+  username: string;
+  status: string;
+  used_traffic: number;
+  data_limit: number | null;
+  expire: number | null;
+  note: string | null;
+  online_at: string | null;
+  sub_last_user_agent: string | null;
+  proxy_filtered: boolean;
+  proxy_extra_configs: number;
+}
+
+export interface SubProxyUsersResponse {
+  items: SubProxyUserSummary[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface SubProxyNamedConfig {
+  name: string;
+  uri: string;
+  enabled: boolean;
+}
+
+export interface SubProxyStoredConfig extends SubProxyNamedConfig {
+  id: number;
+  sort_order?: number;
+}
+
+export interface SubProxyNodeFilter {
+  all: boolean;
+  allowed_configs: string[];
+}
+
+export interface SubProxyUsageRow {
+  node_id: number | null;
+  node_name: string;
+  used_traffic: number;
+  uplink?: number;
+  downlink?: number;
+}
+
+export interface SubProxyDeviceHistoryItem {
+  user_agent: string | null;
+  ip: string | null;
+  timestamp: number;
+}
+
+export interface SubProxyUserRecord {
+  username: string;
+  status: string;
+  used_traffic: number;
+  data_limit: number | null;
+  expire: number | null;
+  note: string | null;
+  created_at: string | null;
+  online_at: string | null;
+  sub_last_user_agent: string | null;
+  links: string[];
+}
+
+export interface SubProxyUserDetails {
+  user: SubProxyUserRecord;
+  usage: {
+    usages: SubProxyUsageRow[];
+  };
+  node_filter: SubProxyNodeFilter;
+  per_user_configs: SubProxyNamedConfig[];
+  device_history: SubProxyDeviceHistoryItem[];
+}
+
+export interface SubProxySettings {
+  sub_update_interval: number | null;
+}
+
 export const api = {
   login: (username: string, password: string) =>
     request<TokenResponse>("/auth/login", {
@@ -343,6 +448,29 @@ export const api = {
   },
   master: {
     update: () => request<Task>("/master/update", { method: "POST" }),
+  },
+  subProxy: {
+    status: () => request<SubProxyStatus>("/subproxy/status"),
+    users: (params: { limit?: number; offset?: number } = {}) =>
+      request<SubProxyUsersResponse>(`/subproxy/users${buildQuery(params)}`),
+    userDetails: (username: string) =>
+      request<SubProxyUserDetails>(`/subproxy/users/${encodeURIComponent(username)}`),
+    configs: () => request<SubProxyStoredConfig[]>("/subproxy/configs"),
+    createConfig: (payload: { name?: string | null; uri: string; enabled: boolean }) =>
+      request<{ ok: boolean }>("/subproxy/configs", { method: "POST", body: JSON.stringify(payload) }),
+    deleteConfig: (configId: number) =>
+      request<void>(`/subproxy/configs/${configId}`, { method: "DELETE" }),
+    reorderConfigs: (payload: Array<{ id: number; name?: string | null; uri?: string | null; enabled: boolean }>) =>
+      request<{ ok: boolean }>("/subproxy/configs/reorder", { method: "POST", body: JSON.stringify(payload) }),
+    perUserConfigs: () => request<Record<string, SubProxyNamedConfig[]>>("/subproxy/per-user-configs"),
+    savePerUserConfigs: (payload: Record<string, SubProxyNamedConfig[]>) =>
+      request<{ ok: boolean }>("/subproxy/per-user-configs", { method: "POST", body: JSON.stringify(payload) }),
+    nodeFilters: () => request<Record<string, SubProxyNodeFilter>>("/subproxy/node-filters"),
+    saveNodeFilters: (payload: Record<string, SubProxyNodeFilter>) =>
+      request<{ ok: boolean }>("/subproxy/node-filters", { method: "POST", body: JSON.stringify(payload) }),
+    settings: () => request<SubProxySettings>("/subproxy/settings"),
+    saveSettings: (payload: SubProxySettings) =>
+      request<{ ok: boolean }>("/subproxy/settings", { method: "POST", body: JSON.stringify(payload) }),
   },
 
   nodes: {

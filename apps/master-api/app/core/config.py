@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     agent_auto_update_batch_size: int = 1
     sse_ping_seconds: int = 20
     alert_notification_timeout_seconds: int = 10
+    sub_proxy_base_url: str = ""
+    sub_proxy_hmac_secret: str = ""
+    sub_proxy_timeout_seconds: int = 10
 
 
 settings = Settings()
