@@ -1,6 +1,8 @@
+import uuid as _uuid
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, HTTPException, status
+from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
@@ -24,7 +26,7 @@ from app.services.alerts import (
     list_notification_channels,
     notification_payload,
 )
-from app.services.app_settings import TELEGRAM_BOT_SETTING_KEY, get_setting
+from app.services.app_settings import TELEGRAM_BOT_SETTING_KEY, create_bot_notification_task, get_setting
 from app.services.events import is_noisy_dynamic_udp_port
 from app.services.notifications import dispatch_channels
 from app.services.realtime import publish_event
@@ -106,6 +108,8 @@ async def heartbeat(body: HeartbeatRequest, node: AgentNode, db: DB):
         ))
 
     notifications = await evaluate_offline_alert(db, node=node, active=False)
+    for envelope in notifications:
+        await create_bot_notification_task(db, notification_payload(envelope))
     await db.commit()
     if notifications:
         for envelope in notifications:
@@ -285,6 +289,8 @@ async def snapshot(body: SnapshotRequest, node: AgentNode, db: DB):
         containers_collected=body.containers_collected,
         ports_collected=body.ports_collected,
     )
+    for envelope in notifications:
+        await create_bot_notification_task(db, notification_payload(envelope))
 
     await db.commit()
     for envelope in notifications:
@@ -357,6 +363,11 @@ async def _assert_bot_runner(node: Node, db) -> None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not the designated bot runner")
 
 
+class BotTaskCreate(BaseModel):
+    type: str
+    payload: dict = Field(default_factory=dict)
+
+
 @router.get("/bot/nodes")
 async def bot_get_nodes(node: AgentNode, db: DB):
     await _assert_bot_runner(node, db)
@@ -393,7 +404,127 @@ async def bot_get_alerts(node: AgentNode, db: DB):
             "node_name": n.name if n else None,
             "severity": rule.severity,
             "message": incident.message,
+            "acknowledged": incident.acknowledged_at is not None,
             "started_at": incident.started_at.isoformat(),
         }
         for incident, rule, n in rows.all()
     ]
+
+
+@router.get("/bot/node/{node_id}")
+async def bot_get_node_detail(node_id: str, node: AgentNode, db: DB):
+    await _assert_bot_runner(node, db)
+    res = await db.execute(select(Node).where(Node.id == node_id))
+    target = res.scalar_one_or_none()
+    if not target:
+        raise HTTPException(status_code=404, detail="Node not found")
+    metric_res = await db.execute(
+        select(NodeMetric).where(NodeMetric.node_id == target.id)
+        .order_by(NodeMetric.created_at.desc()).limit(1)
+    )
+    m = metric_res.scalar_one_or_none()
+    return {
+        "id": str(target.id),
+        "name": target.name,
+        "status": target.status,
+        "hostname": target.hostname or "",
+        "public_ip": target.public_ip or "",
+        "os": target.os or "",
+        "arch": target.arch or "",
+        "uptime_seconds": target.uptime_seconds,
+        "agent_version": target.agent_version or "",
+        "cpu_percent": m.cpu_percent if m else None,
+        "ram_used_mb": m.ram_used_mb if m else None,
+        "ram_total_mb": m.ram_total_mb if m else None,
+        "disk_used_gb": m.disk_used_gb if m else None,
+        "disk_total_gb": m.disk_total_gb if m else None,
+        "load_1": m.load_1 if m else None,
+    }
+
+
+@router.get("/bot/node/{node_id}/metrics")
+async def bot_get_node_metrics(node_id: str, node: AgentNode, db: DB):
+    await _assert_bot_runner(node, db)
+    since = datetime.now(UTC) - timedelta(hours=2)
+    result = await db.execute(
+        select(NodeMetric)
+        .where(NodeMetric.node_id == node_id, NodeMetric.created_at >= since)
+        .order_by(NodeMetric.created_at.asc())
+    )
+    metrics = result.scalars().all()
+    if len(metrics) > 24:
+        stride = max(1, len(metrics) // 24)
+        metrics = metrics[::stride]
+    points = []
+    for m in metrics:
+        ram_pct = 0.0
+        if m.ram_total_mb and m.ram_total_mb > 0:
+            ram_pct = round((m.ram_used_mb or 0) / m.ram_total_mb * 100, 1)
+        disk_pct = 0.0
+        if m.disk_total_gb and m.disk_total_gb > 0:
+            disk_pct = round((m.disk_used_gb or 0) / m.disk_total_gb * 100, 1)
+        points.append({
+            "time": m.created_at.strftime("%H:%M"),
+            "cpu_percent": round(m.cpu_percent or 0, 1),
+            "ram_percent": ram_pct,
+            "disk_percent": disk_pct,
+        })
+    return points
+
+
+@router.get("/bot/node/{node_id}/containers")
+async def bot_get_node_containers(node_id: str, node: AgentNode, db: DB):
+    await _assert_bot_runner(node, db)
+    result = await db.execute(
+        select(DockerContainer)
+        .where(DockerContainer.node_id == node_id)
+        .order_by(DockerContainer.name)
+    )
+    containers = result.scalars().all()
+    return [
+        {
+            "container_id": c.container_id,
+            "name": c.name,
+            "image": (c.image or "").split(":")[0],
+            "status": c.status or "",
+            "state": c.state or "",
+            "cpu_percent": round(c.cpu_percent or 0, 1),
+            "ram_mb": round(c.ram_mb or 0),
+        }
+        for c in containers
+    ]
+
+
+@router.post("/bot/node/{node_id}/task", status_code=201)
+async def bot_create_task(node_id: str, body: BotTaskCreate, node: AgentNode, db: DB):
+    await _assert_bot_runner(node, db)
+    target_res = await db.execute(select(Node).where(Node.id == node_id))
+    if not target_res.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Node not found")
+    task = Task(node_id=_uuid.UUID(node_id), type=body.type, payload=body.payload)
+    db.add(task)
+    await db.commit()
+    await db.refresh(task)
+    return {"id": str(task.id), "status": task.status}
+
+
+@router.post("/bot/alert/{incident_id}/ack")
+async def bot_ack_alert(incident_id: str, node: AgentNode, db: DB):
+    await _assert_bot_runner(node, db)
+    res = await db.execute(select(AlertIncident).where(AlertIncident.id == incident_id))
+    incident = res.scalar_one_or_none()
+    if not incident:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    incident.acknowledged_at = datetime.now(UTC)
+    await db.commit()
+    return {"ok": True}
+
+
+@router.get("/bot/tasks/{task_id}")
+async def bot_get_task(task_id: str, node: AgentNode, db: DB):
+    await _assert_bot_runner(node, db)
+    res = await db.execute(select(Task).where(Task.id == task_id))
+    task = res.scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return {"id": str(task.id), "status": task.status, "result": task.result, "error": task.error}

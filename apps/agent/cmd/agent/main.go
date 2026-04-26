@@ -216,6 +216,27 @@ func processTasks(ctx context.Context, c *client.Client) {
 	}
 	for _, task := range tasks {
 		log.Printf("executing task %s type=%s", task.ID, task.Type)
+		if task.Type == "bot.notify" {
+			botState.Lock()
+			b := botState.instance
+			botState.Unlock()
+			if b != nil {
+				text, _ := task.Payload["text"].(string)
+				parseMode, _ := task.Payload["parse_mode"].(string)
+				chatIDsRaw, _ := task.Payload["chat_ids"].([]interface{})
+				chatIDs := make([]int64, 0, len(chatIDsRaw))
+				for _, id := range chatIDsRaw {
+					if f, ok := id.(float64); ok {
+						chatIDs = append(chatIDs, int64(f))
+					}
+				}
+				b.SendNotificationToChats(chatIDs, text, parseMode)
+			}
+			if err := c.SubmitTaskResult(ctx, task.ID, client.TaskResultRequest{Status: "success"}); err != nil {
+				log.Printf("submit bot.notify result: %v", err)
+			}
+			continue
+		}
 		if task.Type == "terminal.open" {
 			sessionID, _ := task.Payload["session_id"].(string)
 			shell, _ := task.Payload["shell"].(string)

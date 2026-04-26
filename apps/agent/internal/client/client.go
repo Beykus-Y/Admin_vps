@@ -148,12 +148,13 @@ type BotNode struct {
 }
 
 type BotAlert struct {
-	ID        string `json:"id"`
-	RuleName  string `json:"rule_name"`
-	NodeName  string `json:"node_name"`
-	Severity  string `json:"severity"`
-	Message   string `json:"message"`
-	StartedAt string `json:"started_at"`
+	ID           string `json:"id"`
+	RuleName     string `json:"rule_name"`
+	NodeName     string `json:"node_name"`
+	Severity     string `json:"severity"`
+	Message      string `json:"message"`
+	StartedAt    string `json:"started_at"`
+	Acknowledged bool   `json:"acknowledged"`
 }
 
 func (c *Client) GetBotNodes(ctx context.Context) ([]BotNode, error) {
@@ -178,6 +179,124 @@ func (c *Client) GetBotAlerts(ctx context.Context) ([]BotAlert, error) {
 	}
 	var alerts []BotAlert
 	return alerts, json.Unmarshal(body, &alerts)
+}
+
+type BotNodeDetail struct {
+	ID            string   `json:"id"`
+	Name          string   `json:"name"`
+	Status        string   `json:"status"`
+	Hostname      string   `json:"hostname"`
+	PublicIP      string   `json:"public_ip"`
+	OS            string   `json:"os"`
+	Arch          string   `json:"arch"`
+	UptimeSeconds *int64   `json:"uptime_seconds"`
+	AgentVersion  string   `json:"agent_version"`
+	CPUPercent    *float64 `json:"cpu_percent"`
+	RAMUsedMB     *int64   `json:"ram_used_mb"`
+	RAMTotalMB    *int64   `json:"ram_total_mb"`
+	DiskUsedGB    *float64 `json:"disk_used_gb"`
+	DiskTotalGB   *float64 `json:"disk_total_gb"`
+	Load1         *float64 `json:"load_1"`
+}
+
+type BotMetricPoint struct {
+	Time        string  `json:"time"`
+	CPUPercent  float64 `json:"cpu_percent"`
+	RAMPercent  float64 `json:"ram_percent"`
+	DiskPercent float64 `json:"disk_percent"`
+}
+
+type BotContainer struct {
+	ContainerID string  `json:"container_id"`
+	Name        string  `json:"name"`
+	Image       string  `json:"image"`
+	Status      string  `json:"status"`
+	State       string  `json:"state"`
+	CPUPercent  float64 `json:"cpu_percent"`
+	RAMMB       float64 `json:"ram_mb"`
+}
+
+type BotCreateTaskRequest struct {
+	Type    string         `json:"type"`
+	Payload map[string]any `json:"payload"`
+}
+
+type BotTaskStatus struct {
+	ID     string         `json:"id"`
+	Status string         `json:"status"`
+	Result map[string]any `json:"result"`
+	Error  string         `json:"error"`
+}
+
+func (c *Client) GetBotNodeDetail(ctx context.Context, nodeID string) (*BotNodeDetail, error) {
+	body, status, err := c.do(ctx, "GET", "/agent/bot/node/"+nodeID, nil)
+	if err != nil {
+		return nil, err
+	}
+	if status != 200 {
+		return nil, fmt.Errorf("get bot node detail failed: %d", status)
+	}
+	var d BotNodeDetail
+	return &d, json.Unmarshal(body, &d)
+}
+
+func (c *Client) GetBotNodeMetrics(ctx context.Context, nodeID string) ([]BotMetricPoint, error) {
+	body, status, err := c.do(ctx, "GET", "/agent/bot/node/"+nodeID+"/metrics", nil)
+	if err != nil {
+		return nil, err
+	}
+	if status != 200 {
+		return nil, fmt.Errorf("get bot node metrics failed: %d", status)
+	}
+	var pts []BotMetricPoint
+	return pts, json.Unmarshal(body, &pts)
+}
+
+func (c *Client) GetBotNodeContainers(ctx context.Context, nodeID string) ([]BotContainer, error) {
+	body, status, err := c.do(ctx, "GET", "/agent/bot/node/"+nodeID+"/containers", nil)
+	if err != nil {
+		return nil, err
+	}
+	if status != 200 {
+		return nil, fmt.Errorf("get bot node containers failed: %d", status)
+	}
+	var conts []BotContainer
+	return conts, json.Unmarshal(body, &conts)
+}
+
+func (c *Client) CreateBotTask(ctx context.Context, nodeID string, req BotCreateTaskRequest) (*BotTaskStatus, error) {
+	body, status, err := c.do(ctx, "POST", "/agent/bot/node/"+nodeID+"/task", req)
+	if err != nil {
+		return nil, err
+	}
+	if status != 201 {
+		return nil, fmt.Errorf("create bot task failed: %d %s", status, body)
+	}
+	var t BotTaskStatus
+	return &t, json.Unmarshal(body, &t)
+}
+
+func (c *Client) AckBotAlert(ctx context.Context, incidentID string) error {
+	_, status, err := c.do(ctx, "POST", "/agent/bot/alert/"+incidentID+"/ack", map[string]any{})
+	if err != nil {
+		return err
+	}
+	if status != 200 {
+		return fmt.Errorf("ack bot alert failed: %d", status)
+	}
+	return nil
+}
+
+func (c *Client) GetBotTask(ctx context.Context, taskID string) (*BotTaskStatus, error) {
+	body, status, err := c.do(ctx, "GET", "/agent/bot/tasks/"+taskID, nil)
+	if err != nil {
+		return nil, err
+	}
+	if status != 200 {
+		return nil, fmt.Errorf("get bot task failed: %d", status)
+	}
+	var t BotTaskStatus
+	return &t, json.Unmarshal(body, &t)
 }
 
 type SnapshotMetrics struct {

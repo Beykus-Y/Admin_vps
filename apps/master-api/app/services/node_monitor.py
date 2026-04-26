@@ -7,6 +7,7 @@ from app.db.base import AsyncSessionLocal
 from app.db.models import Event, Node, Task
 from app.services.agent_releases import build_agent_update_payload, is_agent_outdated
 from app.services.alerts import evaluate_offline_alert, evaluate_rule, get_rules_by_kind, list_notification_channels, notification_payload
+from app.services.app_settings import create_bot_notification_task
 from app.services.notifications import dispatch_channels
 from app.services.realtime import publish_event
 from sqlalchemy import select
@@ -32,6 +33,8 @@ async def mark_offline_nodes() -> None:
             ))
             notifications.extend(await evaluate_offline_alert(db, node=node, active=True))
         if stale:
+            for envelope in notifications:
+                await create_bot_notification_task(db, notification_payload(envelope))
             await db.commit()
             for envelope in notifications:
                 channels = await list_notification_channels(db, envelope.severity, status=envelope.status)

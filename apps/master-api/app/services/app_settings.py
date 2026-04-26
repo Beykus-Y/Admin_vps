@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import uuid as _uuid
 from dataclasses import dataclass
 
 from sqlalchemy import select
 
 from app.core.config import settings
-from app.db.models import AppSetting
+from app.db.models import AppSetting, Task
 
 SUB_PROXY_SETTING_KEY = "sub_proxy"
 TELEGRAM_BOT_SETTING_KEY = "telegram_bot"
@@ -56,6 +57,34 @@ async def get_sub_proxy_settings_payload(db) -> dict:
         "timeout_seconds": runtime.timeout_seconds,
         "source": runtime.source,
     }
+
+
+async def create_bot_notification_task(db, payload: dict) -> None:
+    """Create a bot.notify task for the runner node when an alert fires/resolves."""
+    bot_setting = await get_setting(db, TELEGRAM_BOT_SETTING_KEY)
+    runner_node_id = bot_setting.get("runner_node_id")
+    allowed_chat_ids = bot_setting.get("allowed_chat_ids") or []
+    if not runner_node_id or not allowed_chat_ids:
+        return
+
+    severity = payload.get("severity", "warning")
+    status = payload.get("status", "firing")
+    title = payload.get("title") or payload.get("message", "")
+    node_name = payload.get("node_name")
+
+    icons = {"critical": "🚨", "warning": "⚠️", "info": "ℹ️"}
+    icon = icons.get(severity, "⚠️")
+    lines = [f"{icon} <b>{title}</b>"]
+    if node_name:
+        lines.append(f"📍 <b>{node_name}</b>")
+    if status == "resolved":
+        lines.append("✅ <i>Устранён</i>")
+
+    db.add(Task(
+        node_id=_uuid.UUID(runner_node_id),
+        type="bot.notify",
+        payload={"text": "\n".join(lines), "parse_mode": "HTML", "chat_ids": allowed_chat_ids},
+    ))
 
 
 async def get_telegram_bot_settings(db) -> dict:
