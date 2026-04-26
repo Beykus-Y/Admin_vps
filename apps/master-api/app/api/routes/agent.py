@@ -7,11 +7,13 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from app.api.deps import DB, AgentNode
 from app.core.config import settings
 from app.core.security import generate_agent_token, hash_token
-from app.db.models import DockerContainer, Event, Node, NodeCredential, NodeEnrollToken, NodeMetric, OpenPort, Task
+from app.db.models import AlertIncident, AlertRule, DockerContainer, Event, Node, NodeCredential, NodeEnrollToken, NodeMetric, OpenPort, Task
 from app.schemas.agent import (
     EnrollRequest,
     EnrollResponse,
+    HeartbeatBotConfig,
     HeartbeatRequest,
+    HeartbeatResponse,
     SnapshotRequest,
     TaskOut,
     TaskResultRequest,
@@ -22,6 +24,7 @@ from app.services.alerts import (
     list_notification_channels,
     notification_payload,
 )
+from app.services.app_settings import TELEGRAM_BOT_SETTING_KEY, get_setting
 from app.services.events import is_noisy_dynamic_udp_port
 from app.services.notifications import dispatch_channels
 from app.services.realtime import publish_event
@@ -76,7 +79,7 @@ async def enroll(body: EnrollRequest, db: DB):
     )
 
 
-@router.post("/heartbeat", status_code=204)
+@router.post("/heartbeat", response_model=HeartbeatResponse)
 async def heartbeat(body: HeartbeatRequest, node: AgentNode, db: DB):
     now = datetime.now(UTC)
     previous_status = node.status
@@ -121,6 +124,16 @@ async def heartbeat(body: HeartbeatRequest, node: AgentNode, db: DB):
                 await dispatch_channels(channel_payloads, notification_payload(envelope))
     if status_changed or version_changed or capabilities_changed:
         await publish_event("inventory.changed", {"node_id": str(node.id), "status": node.status, "action": "heartbeat_changed"})
+
+    bot_setting = await get_setting(db, TELEGRAM_BOT_SETTING_KEY)
+    is_bot_runner = str(bot_setting.get("runner_node_id", "")) == str(node.id)
+    bot_config = None
+    if is_bot_runner and bot_setting.get("bot_token"):
+        bot_config = HeartbeatBotConfig(
+            bot_token=bot_setting["bot_token"],
+            allowed_chat_ids=bot_setting.get("allowed_chat_ids") or [],
+        )
+    return HeartbeatResponse(is_bot_runner=is_bot_runner, bot_config=bot_config)
 
 
 @router.post("/snapshot", status_code=204)
@@ -336,3 +349,51 @@ async def submit_task_result(task_id: str, body: TaskResultRequest, node: AgentN
     ))
     await db.commit()
     await publish_event("tasks.changed", {"task_id": str(task.id), "node_id": str(node.id), "status": body.status, "type": task.type})
+
+
+async def _assert_bot_runner(node: Node, db) -> None:
+    bot_setting = await get_setting(db, TELEGRAM_BOT_SETTING_KEY)
+    if str(bot_setting.get("runner_node_id", "")) != str(node.id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not the designated bot runner")
+
+
+@router.get("/bot/nodes")
+async def bot_get_nodes(node: AgentNode, db: DB):
+    await _assert_bot_runner(node, db)
+    result = await db.execute(select(Node).order_by(Node.created_at.asc()))
+    nodes = result.scalars().all()
+    return [
+        {
+            "id": str(n.id),
+            "name": n.name,
+            "status": n.status,
+            "hostname": n.hostname or "",
+            "public_ip": n.public_ip or "",
+        }
+        for n in nodes
+    ]
+
+
+@router.get("/bot/alerts")
+async def bot_get_alerts(node: AgentNode, db: DB):
+    await _assert_bot_runner(node, db)
+    stmt = (
+        select(AlertIncident, AlertRule, Node)
+        .join(AlertRule, AlertRule.id == AlertIncident.rule_id)
+        .outerjoin(Node, Node.id == AlertIncident.node_id)
+        .where(AlertIncident.resolved_at == None)  # noqa: E711
+        .order_by(AlertIncident.started_at.desc())
+        .limit(20)
+    )
+    rows = await db.execute(stmt)
+    return [
+        {
+            "id": str(incident.id),
+            "rule_name": rule.name,
+            "node_name": n.name if n else None,
+            "severity": rule.severity,
+            "message": incident.message,
+            "started_at": incident.started_at.isoformat(),
+        }
+        for incident, rule, n in rows.all()
+    ]

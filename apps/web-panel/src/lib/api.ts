@@ -451,6 +451,18 @@ export interface SubProxyConnectionSettingsUpdate {
   timeout_seconds: number;
 }
 
+export interface TelegramBotSettings {
+  runner_node_id: string | null;
+  bot_token_set: boolean;
+  allowed_chat_ids: number[];
+}
+
+export interface TelegramBotSettingsUpdate {
+  runner_node_id: string | null;
+  bot_token?: string | null;
+  allowed_chat_ids: number[];
+}
+
 export const api = {
   login: (username: string, password: string) =>
     request<TokenResponse>("/auth/login", {
@@ -540,6 +552,9 @@ export const api = {
       request<SubProxyConnectionSettings>("/settings/sub-proxy", { method: "PUT", body: JSON.stringify(payload) }),
     testSubProxy: () =>
       request<{ ok: boolean; status: SubProxyStatus }>("/settings/sub-proxy/test", { method: "POST" }),
+    telegramBot: () => request<TelegramBotSettings>("/settings/telegram-bot"),
+    saveTelegramBot: (payload: TelegramBotSettingsUpdate) =>
+      request<TelegramBotSettings>("/settings/telegram-bot", { method: "PUT", body: JSON.stringify(payload) }),
   },
 
   nodes: {

@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/filincontrol/agent/internal/bot"
 	"github.com/filincontrol/agent/internal/client"
 	"github.com/filincontrol/agent/internal/collector"
 	"github.com/filincontrol/agent/internal/config"
@@ -27,6 +28,11 @@ var publicIPCache = struct {
 	sync.Mutex
 	value     string
 	fetchedAt time.Time
+}{}
+
+var botState = struct {
+	sync.Mutex
+	instance *bot.Bot
 }{}
 
 func main() {
@@ -63,10 +69,13 @@ func main() {
 		select {
 		case <-heartbeatTick.C:
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			if err := c.Heartbeat(ctx, version, capabilities); err != nil {
-				log.Printf("heartbeat error: %v", err)
-			}
+			resp, err := c.Heartbeat(ctx, version, capabilities)
 			cancel()
+			if err != nil {
+				log.Printf("heartbeat error: %v", err)
+			} else {
+				updateBotRunner(resp, c)
+			}
 
 		case <-collectTick.C:
 			go func() {
@@ -87,6 +96,23 @@ func main() {
 				defer cancel()
 				processTasks(ctx, c)
 			}()
+		}
+	}
+}
+
+func updateBotRunner(resp *client.HeartbeatResponse, c *client.Client) {
+	botState.Lock()
+	defer botState.Unlock()
+
+	if resp.IsBotRunner && resp.BotConfig != nil && resp.BotConfig.BotToken != "" {
+		if botState.instance == nil {
+			botState.instance = bot.New(resp.BotConfig.BotToken, resp.BotConfig.AllowedChatIDs, c)
+			botState.instance.Start()
+		}
+	} else {
+		if botState.instance != nil {
+			botState.instance.Stop()
+			botState.instance = nil
 		}
 	}
 }

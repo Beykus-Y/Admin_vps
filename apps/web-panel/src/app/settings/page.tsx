@@ -2,11 +2,11 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { CheckCircle2, Loader2, Save, ShieldCheck, Wifi } from "lucide-react";
+import { Bot, CheckCircle2, Loader2, Save, ShieldCheck, Wifi } from "lucide-react";
 import clsx from "clsx";
 import Layout from "@/components/Layout";
 import { Card, Pill, SoftButton } from "@/components/ui";
-import { api, SubProxyConnectionSettings } from "@/lib/api";
+import { api, Node, SubProxyConnectionSettings, TelegramBotSettings } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 
 type Notice = { type: "ok" | "err"; message: string } | null;
@@ -45,23 +45,42 @@ function TextInput({
 export default function SettingsPage() {
   const router = useRouter();
   const { user } = useAuth();
+
+  // Sub Proxy state
   const [settings, setSettings] = useState<SubProxyConnectionSettings | null>(null);
   const [baseUrl, setBaseUrl] = useState("");
   const [hmacSecret, setHmacSecret] = useState("");
   const [timeoutSeconds, setTimeoutSeconds] = useState("10");
   const [clearSecret, setClearSecret] = useState(false);
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
+
+  // Telegram Bot state
+  const [botSettings, setBotSettings] = useState<TelegramBotSettings | null>(null);
+  const [nodes, setNodes] = useState<Node[]>([]);
+  const [botRunnerNodeId, setBotRunnerNodeId] = useState<string>("");
+  const [botToken, setBotToken] = useState("");
+  const [allowedChatIds, setAllowedChatIds] = useState("");
+  const [savingBot, setSavingBot] = useState(false);
+
+  const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState<Notice>(null);
 
   const loadSettings = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await api.settings.subProxy();
-      setSettings(data);
-      setBaseUrl(data.base_url);
-      setTimeoutSeconds(String(data.timeout_seconds));
+      const [subProxyData, botData, nodesData] = await Promise.all([
+        api.settings.subProxy(),
+        api.settings.telegramBot(),
+        api.nodes.list(),
+      ]);
+      setSettings(subProxyData);
+      setBaseUrl(subProxyData.base_url);
+      setTimeoutSeconds(String(subProxyData.timeout_seconds));
+      setBotSettings(botData);
+      setBotRunnerNodeId(botData.runner_node_id ?? "");
+      setAllowedChatIds((botData.allowed_chat_ids ?? []).join(", "));
+      setNodes(nodesData);
       setNotice(null);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Не удалось загрузить настройки";
@@ -117,6 +136,30 @@ export default function SettingsPage() {
       setNotice({ type: "err", message: err instanceof Error ? err.message : "Sub Proxy не отвечает" });
     } finally {
       setTesting(false);
+    }
+  }
+
+  async function saveBotSettings() {
+    setSavingBot(true);
+    try {
+      const chatIds = allowedChatIds
+        .split(/[,\s]+/)
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .map((s) => Number(s))
+        .filter((n) => !Number.isNaN(n));
+      const result = await api.settings.saveTelegramBot({
+        runner_node_id: botRunnerNodeId || null,
+        bot_token: botToken.trim() || null,
+        allowed_chat_ids: chatIds,
+      });
+      setBotSettings(result);
+      setBotToken("");
+      setNotice({ type: "ok", message: "Настройки бота сохранены" });
+    } catch (err: unknown) {
+      setNotice({ type: "err", message: err instanceof Error ? err.message : "Не удалось сохранить настройки бота" });
+    } finally {
+      setSavingBot(false);
     }
   }
 
@@ -206,6 +249,88 @@ export default function SettingsPage() {
               <div className="flex justify-between gap-3">
                 <span className="text-[#4a5170]">Timeout</span>
                 <span className="text-[#dde2f0]">{settings?.timeout_seconds ?? 10} сек</span>
+              </div>
+            </div>
+          </Card>
+        </div>
+
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
+          <Card className="p-4">
+            <div className="mb-4 flex items-center gap-2">
+              <Bot size={17} className="text-[#60a5fa]" />
+              <div className="text-sm font-semibold text-[#e8eaf6]">Telegram Bot</div>
+            </div>
+
+            <div className="grid gap-4 lg:grid-cols-2">
+              <Field label="Запускать бот на ноде">
+                <select
+                  value={botRunnerNodeId}
+                  onChange={(e) => setBotRunnerNodeId(e.target.value)}
+                  className="w-full rounded-lg border border-[#1d2135] bg-[#0c0e16] px-3 py-2.5 text-sm text-[#dde2f0] outline-none transition focus:border-[#60a5fa]/70"
+                >
+                  <option value="">— не запускать —</option>
+                  {nodes.map((n) => (
+                    <option key={n.id} value={n.id}>
+                      {n.name} ({n.status}){n.public_ip ? ` — ${n.public_ip}` : ""}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Bot Token">
+                <TextInput
+                  value={botToken}
+                  onChange={setBotToken}
+                  type="password"
+                  placeholder={botSettings?.bot_token_set ? "токен задан" : "вставьте токен от @BotFather"}
+                />
+              </Field>
+              <Field label="Allowed Chat IDs (через запятую)">
+                <TextInput
+                  value={allowedChatIds}
+                  onChange={setAllowedChatIds}
+                  placeholder="123456789, 987654321"
+                />
+              </Field>
+            </div>
+
+            <div className="mt-5">
+              <SoftButton onClick={saveBotSettings} disabled={savingBot} variant="primary">
+                {savingBot ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}
+                Сохранить
+              </SoftButton>
+            </div>
+          </Card>
+
+          <Card className="p-4">
+            <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.14em] text-[#4a5170]">
+              <CheckCircle2
+                size={13}
+                className={botSettings?.runner_node_id && botSettings?.bot_token_set ? "text-[#4ade80]" : "text-[#fbbf24]"}
+              />
+              Состояние бота
+            </div>
+            <div className="mt-3 space-y-2 font-mono text-xs">
+              <div className="flex justify-between gap-3">
+                <span className="text-[#4a5170]">Runner</span>
+                <span className="truncate text-[#dde2f0]">
+                  {botSettings?.runner_node_id
+                    ? (nodes.find((n) => n.id === botSettings.runner_node_id)?.name ?? botSettings.runner_node_id)
+                    : "не задан"}
+                </span>
+              </div>
+              <div className="flex justify-between gap-3">
+                <span className="text-[#4a5170]">Token</span>
+                <span className={botSettings?.bot_token_set ? "text-[#4ade80]" : "text-[#fbbf24]"}>
+                  {botSettings?.bot_token_set ? "задан" : "не задан"}
+                </span>
+              </div>
+              <div className="flex justify-between gap-3">
+                <span className="text-[#4a5170]">Chat IDs</span>
+                <span className="text-[#dde2f0]">
+                  {botSettings?.allowed_chat_ids?.length
+                    ? botSettings.allowed_chat_ids.join(", ")
+                    : "все (не ограничено)"}
+                </span>
               </div>
             </div>
           </Card>

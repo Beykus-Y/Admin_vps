@@ -95,3 +95,13 @@ class TaskResultRequest(BaseModel):
     status: str  # success | failed
     result: dict | None = None
     error: str | None = None
+
+
+class HeartbeatBotConfig(BaseModel):
+    bot_token: str
+    allowed_chat_ids: list[int] = Field(default_factory=list)
+
+
+class HeartbeatResponse(BaseModel):
+    is_bot_runner: bool = False
+    bot_config: HeartbeatBotConfig | None = None

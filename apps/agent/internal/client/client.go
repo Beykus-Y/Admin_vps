@@ -113,19 +113,71 @@ type HeartbeatRequest struct {
 	Capabilities []string `json:"capabilities,omitempty"`
 }
 
-func (c *Client) Heartbeat(ctx context.Context, version string, capabilities []string) error {
-	_, status, err := c.do(ctx, "POST", "/agent/heartbeat", HeartbeatRequest{
+type BotConfig struct {
+	BotToken       string  `json:"bot_token"`
+	AllowedChatIDs []int64 `json:"allowed_chat_ids"`
+}
+
+type HeartbeatResponse struct {
+	IsBotRunner bool       `json:"is_bot_runner"`
+	BotConfig   *BotConfig `json:"bot_config,omitempty"`
+}
+
+func (c *Client) Heartbeat(ctx context.Context, version string, capabilities []string) (*HeartbeatResponse, error) {
+	body, status, err := c.do(ctx, "POST", "/agent/heartbeat", HeartbeatRequest{
 		AgentVersion: version,
 		Status:       "online",
 		Capabilities: capabilities,
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if status != 204 {
-		return fmt.Errorf("heartbeat failed: %d", status)
+	if status != 200 {
+		return nil, fmt.Errorf("heartbeat failed: %d", status)
 	}
-	return nil
+	var resp HeartbeatResponse
+	return &resp, json.Unmarshal(body, &resp)
+}
+
+type BotNode struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Status   string `json:"status"`
+	Hostname string `json:"hostname"`
+	PublicIP string `json:"public_ip"`
+}
+
+type BotAlert struct {
+	ID        string `json:"id"`
+	RuleName  string `json:"rule_name"`
+	NodeName  string `json:"node_name"`
+	Severity  string `json:"severity"`
+	Message   string `json:"message"`
+	StartedAt string `json:"started_at"`
+}
+
+func (c *Client) GetBotNodes(ctx context.Context) ([]BotNode, error) {
+	body, status, err := c.do(ctx, "GET", "/agent/bot/nodes", nil)
+	if err != nil {
+		return nil, err
+	}
+	if status != 200 {
+		return nil, fmt.Errorf("get bot nodes failed: %d", status)
+	}
+	var nodes []BotNode
+	return nodes, json.Unmarshal(body, &nodes)
+}
+
+func (c *Client) GetBotAlerts(ctx context.Context) ([]BotAlert, error) {
+	body, status, err := c.do(ctx, "GET", "/agent/bot/alerts", nil)
+	if err != nil {
+		return nil, err
+	}
+	if status != 200 {
+		return nil, fmt.Errorf("get bot alerts failed: %d", status)
+	}
+	var alerts []BotAlert
+	return alerts, json.Unmarshal(body, &alerts)
 }
 
 type SnapshotMetrics struct {
