@@ -331,6 +331,7 @@ export interface SubProxyUserSummary {
   sub_last_user_agent: string | null;
   proxy_filtered: boolean;
   proxy_extra_configs: number;
+  proxy_last_device: SubProxyDeviceHistoryItem | null;
 }
 
 export interface SubProxyUsersResponse {
@@ -368,6 +369,17 @@ export interface SubProxyDeviceHistoryItem {
   user_agent: string | null;
   ip: string | null;
   timestamp: number;
+  device_id?: string | null;
+  device_name?: string | null;
+  client_name?: string | null;
+  client_version?: string | null;
+  platform?: string | null;
+  os?: string | null;
+  fingerprint?: string | null;
+  metadata?: {
+    headers?: Record<string, string>;
+    sources?: Record<string, string>;
+  };
 }
 
 export interface SubProxyUserRecord {

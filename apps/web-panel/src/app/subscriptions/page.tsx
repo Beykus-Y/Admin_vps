@@ -3,7 +3,23 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import clsx from "clsx";
-import { ChevronDown, ChevronUp, Loader2, Plus, RefreshCw, Save, Trash2 } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronUp,
+  Clock3,
+  Database,
+  Loader2,
+  MonitorSmartphone,
+  Network,
+  Plus,
+  RefreshCw,
+  Save,
+  Server,
+  Settings2,
+  ShieldCheck,
+  Trash2,
+  type LucideIcon,
+} from "lucide-react";
 import Layout from "@/components/Layout";
 import { Card, Pill, SearchBar, SectionTitle, SoftButton, StatCard } from "@/components/ui";
 import {
@@ -82,6 +98,117 @@ function expiryBadge(expire: number | null | undefined) {
 
 function statusDot(status: string) {
   return subscriptionStatusColor(status);
+}
+
+type DeviceRecord = SubProxyUserSummary["proxy_last_device"];
+
+function shortValue(value: string | null | undefined, head = 10, tail = 6): string {
+  if (!value) return "—";
+  if (value.length <= head + tail + 3) return value;
+  return `${value.slice(0, head)}...${value.slice(-tail)}`;
+}
+
+function userAgentClient(userAgent: string | null | undefined): string | null {
+  if (!userAgent) return null;
+  const firstToken = userAgent.split(" ", 1)[0];
+  const [name, version] = firstToken.split("/");
+  if (!name) return null;
+  return version ? `${name} ${version}` : name;
+}
+
+function deviceClientLabel(device: DeviceRecord | null | undefined, fallbackUserAgent?: string | null): string {
+  const name = device?.client_name || userAgentClient(device?.user_agent || fallbackUserAgent) || "unknown client";
+  if (device?.client_name && device.client_version) return `${device.client_name} ${device.client_version}`;
+  return name;
+}
+
+function deviceContextLine(device: DeviceRecord | null | undefined): string {
+  return [device?.device_name, device?.platform, device?.os].filter(Boolean).join(" · ");
+}
+
+function deviceSearchText(device: DeviceRecord | null | undefined): string {
+  if (!device) return "";
+  return [
+    device.user_agent,
+    device.device_id,
+    device.device_name,
+    device.client_name,
+    device.client_version,
+    device.platform,
+    device.os,
+    device.fingerprint,
+  ].filter(Boolean).join(" ");
+}
+
+function InfoTile({
+  label,
+  value,
+  icon: Icon,
+  color = "#38bdf8",
+}: {
+  label: string;
+  value: React.ReactNode;
+  icon: LucideIcon;
+  color?: string;
+}) {
+  return (
+    <div className="rounded-lg border border-[#1a1d2e] bg-[#0c0e16] p-3">
+      <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.14em] text-[#4a5170]">
+        <Icon size={13} style={{ color }} />
+        {label}
+      </div>
+      <div className="mt-2 truncate text-lg font-bold" style={{ color }}>{value}</div>
+    </div>
+  );
+}
+
+function DeviceHistoryRow({ item }: { item: NonNullable<DeviceRecord> }) {
+  const context = deviceContextLine(item);
+  const sources = item.metadata?.sources ?? {};
+
+  return (
+    <div className="rounded-lg border border-[#1a1d2e] bg-[#111420] px-3 py-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <MonitorSmartphone size={15} className="text-[#38bdf8]" />
+            <span className="truncate text-sm font-semibold text-[#e8eaf6]">{deviceClientLabel(item)}</span>
+            {item.device_id && <Pill color="purple">HWID</Pill>}
+            {item.fingerprint && <Pill color="gray">fp {shortValue(item.fingerprint, 6, 4)}</Pill>}
+          </div>
+          {context && <div className="mt-1 truncate font-mono text-[10px] text-[#5c6687]">{context}</div>}
+        </div>
+        <div className="shrink-0 text-right font-mono text-[10px] text-[#4a5170]">
+          <div>{formatRelativeTime(new Date(item.timestamp * 1000).toISOString())}</div>
+          <div className="mt-1 text-[#2a3355]">{formatFullDateTime(new Date(item.timestamp * 1000).toISOString())}</div>
+        </div>
+      </div>
+
+      <div className="mt-3 grid gap-2 text-[11px] sm:grid-cols-2">
+        <div className="rounded-md bg-[#0c0e16] px-2.5 py-2">
+          <div className="font-mono text-[9px] uppercase tracking-[0.14em] text-[#2a3355]">IP</div>
+          <div className="mt-1 font-mono text-[#8892b0]">{item.ip || "неизвестен"}</div>
+        </div>
+        <div className="rounded-md bg-[#0c0e16] px-2.5 py-2">
+          <div className="font-mono text-[9px] uppercase tracking-[0.14em] text-[#2a3355]">HWID / fingerprint</div>
+          <div className="mt-1 font-mono text-[#8892b0]" title={item.device_id || item.fingerprint || undefined}>
+            {item.device_id ? shortValue(item.device_id) : shortValue(item.fingerprint)}
+          </div>
+        </div>
+      </div>
+
+      {item.user_agent && (
+        <div className="mt-2 truncate font-mono text-[10px] text-[#3a4460]" title={item.user_agent}>
+          {item.user_agent}
+        </div>
+      )}
+      {sources.device_id && (
+        <div className="mt-1 font-mono text-[9px] uppercase tracking-[0.12em] text-[#2a3355]">
+          источник HWID: {sources.device_id}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function SubscriptionsPage() {
@@ -207,7 +334,7 @@ export default function SubscriptionsPage() {
       if (userFilter === "filtered" && !item.proxy_filtered) return false;
       if (userFilter === "extra" && item.proxy_extra_configs < 1) return false;
       if (!query) return true;
-      return [item.username, item.note, item.sub_last_user_agent]
+      return [item.username, item.note, item.sub_last_user_agent, deviceSearchText(item.proxy_last_device)]
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(query));
     });
@@ -224,6 +351,9 @@ export default function SubscriptionsPage() {
   const selectedPerUserConfigs = selectedUsername ? (perUserConfigsMap[selectedUsername] ?? []) : [];
   const onlineNodes = status?.nodes.filter((node) => node.status === "connected").length ?? 0;
   const reachable = status?.marzban.reachable ?? false;
+  const selectedLastDevice = selectedDetails?.device_history[0] ?? null;
+  const activeUsers = users.filter((item) => item.status === "active").length;
+  const usersWithKnownHwid = users.filter((item) => item.proxy_last_device?.device_id).length;
 
   function showSuccess(message: string) {
     setNotice({ type: "ok", message });
@@ -449,9 +579,43 @@ export default function SubscriptionsPage() {
           </Card>
         )}
 
+        <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_340px]">
+          <div className="rounded-lg border border-[#1d2135] bg-[#10131d] p-4">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <ShieldCheck size={17} className={reachable ? "text-[#4ade80]" : "text-[#f87171]"} />
+                  <span className="text-sm font-semibold text-[#e8eaf6]">Sub Proxy</span>
+                  <Pill color={reachable ? "green" : "red"}>{reachable ? "Marzban доступен" : "Marzban недоступен"}</Pill>
+                </div>
+                <div className="mt-1 font-mono text-[11px] text-[#5c6687]">
+                  {formatNumber(users.length)} пользователей · {formatNumber(status?.counts.global_enabled_configs ?? 0)} глобальных конфигов включено
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:justify-end">
+                <Pill color="blue">{formatNumber(usersWithKnownHwid)} HWID</Pill>
+                <Pill color="purple">{formatNumber(status?.counts.per_user_configs ?? 0)} extra</Pill>
+                <Pill color="yellow">{formatNumber(status?.counts.filtered_users ?? 0)} фильтров</Pill>
+                <Pill color={onlineNodes > 0 ? "green" : "gray"}>{formatNumber(onlineNodes)} нод онлайн</Pill>
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-[#1d2135] bg-[#10131d] p-4">
+            <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.14em] text-[#4a5170]">
+              <Settings2 size={13} className="text-[#818cf8]" />
+              Интервал обновления
+            </div>
+            <div className="mt-2 text-xl font-bold text-[#e8eaf6]">
+              {settings.sub_update_interval == null ? "по Marzban" : `${settings.sub_update_interval} ч`}
+            </div>
+            <div className="mt-1 font-mono text-[10px] text-[#2a3355]">profile-update-interval</div>
+          </div>
+        </div>
+
         <div className="grid grid-cols-2 gap-3 xl:grid-cols-5">
           <StatCard label="Пользователи" value={formatNumber(users.length)} sub={reachable ? "Marzban доступен" : "Marzban недоступен"} color={reachable ? "#4ade80" : "#f87171"} />
-          <StatCard label="Активны" value={formatNumber(users.filter((item) => item.status === "active").length)} sub="по данным Marzban" color="#38bdf8" />
+          <StatCard label="Активны" value={formatNumber(activeUsers)} sub="по данным Marzban" color="#38bdf8" />
           <StatCard label="С фильтром" value={formatNumber(status?.counts.filtered_users ?? 0)} sub="режим частичной подписки" color="#fbbf24" />
           <StatCard label="Extra конфиги" value={formatNumber(status?.counts.per_user_configs ?? 0)} sub={`${status?.counts.global_enabled_configs ?? 0} глобально включено`} color="#818cf8" />
           <StatCard label="Ноды" value={formatNumber(status?.nodes.length ?? 0)} sub={`${onlineNodes} онлайн`} color={onlineNodes > 0 ? "#4ade80" : "#4a5170"} />
@@ -494,7 +658,7 @@ export default function SubscriptionsPage() {
                 <div className="text-sm font-semibold text-[#e8eaf6]">Пользователи подписок</div>
                 <div className="mt-1 font-mono text-[10px] text-[#4a5170]">{formatNumber(filteredUsers.length)} из {formatNumber(users.length)}</div>
               </div>
-              <Pill color={reachable ? "green" : "red"}>{reachable ? "proxy online" : "proxy issue"}</Pill>
+              <Pill color={reachable ? "green" : "red"}>{reachable ? "proxy онлайн" : "proxy ошибка"}</Pill>
             </div>
             <div className="max-h-[820px] overflow-y-auto">
               {filteredUsers.length === 0 ? (
@@ -502,13 +666,15 @@ export default function SubscriptionsPage() {
               ) : filteredUsers.map((item) => {
                 const selected = item.username === selectedUsername;
                 const expireIso = unixToIso(item.expire);
+                const lastDevice = item.proxy_last_device;
+                const deviceContext = deviceContextLine(lastDevice);
                 return (
                   <button
                     key={item.username}
                     onClick={() => setSelectedUsername(item.username)}
                     className={clsx(
                       "w-full border-b border-[#0f1218] px-4 py-3 text-left transition hover:bg-[#141722]",
-                      selected && "bg-[#141722]"
+                      selected && "bg-[#141722] shadow-[inset_3px_0_0_#4ade80]"
                     )}
                   >
                     <div className="flex items-start justify-between gap-3">
@@ -518,13 +684,20 @@ export default function SubscriptionsPage() {
                           <Pill color={statusDot(item.status)}>{subscriptionStatusLabel(item.status)}</Pill>
                           {item.proxy_filtered && <Pill color="yellow">фильтр</Pill>}
                           {item.proxy_extra_configs > 0 && <Pill color="purple">+{item.proxy_extra_configs}</Pill>}
+                          {lastDevice?.device_id && <Pill color="blue">HWID</Pill>}
                         </div>
                         <div className="mt-1 font-mono text-[10px] text-[#4a5170]">
                           {formatBytes(item.used_traffic)} / {limitLabel(item.data_limit)} · {expireIso ? formatDateTime(expireIso) : "без срока"}
                         </div>
-                        {item.sub_last_user_agent && (
-                          <div className="mt-2 truncate font-mono text-[10px] text-[#2a3355]">
-                            {item.sub_last_user_agent}
+                        {(lastDevice || item.sub_last_user_agent) && (
+                          <div className="mt-2 min-w-0">
+                            <div className="flex items-center gap-1.5 font-mono text-[10px] text-[#5c6687]">
+                              <MonitorSmartphone size={12} className="shrink-0 text-[#38bdf8]" />
+                              <span className="truncate">{deviceClientLabel(lastDevice, item.sub_last_user_agent)}</span>
+                            </div>
+                            {deviceContext && (
+                              <div className="mt-1 truncate font-mono text-[10px] text-[#2a3355]">{deviceContext}</div>
+                            )}
                           </div>
                         )}
                       </div>
@@ -541,12 +714,21 @@ export default function SubscriptionsPage() {
 
           <div className="space-y-4">
             <Card className="p-4">
-              <div className="mb-4 flex items-center justify-between gap-3">
-                <div>
-                  <div className="text-lg font-bold text-[#e8eaf6]">{selectedUsername || "Пользователь не выбран"}</div>
-                  <div className="mt-1 font-mono text-[10px] uppercase tracking-[0.16em] text-[#2a3355]">sub_proxy user detail</div>
+              <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="truncate text-lg font-bold text-[#e8eaf6]">{selectedUsername || "Пользователь не выбран"}</div>
+                    {selectedDetails && <Pill color={subscriptionStatusColor(selectedDetails.user.status)}>{subscriptionStatusLabel(selectedDetails.user.status)}</Pill>}
+                  </div>
+                  <div className="mt-1 font-mono text-[10px] uppercase tracking-[0.16em] text-[#2a3355]">профиль подписки</div>
+                  {selectedLastDevice && (
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                      <Pill color="blue">{deviceClientLabel(selectedLastDevice)}</Pill>
+                      {deviceContextLine(selectedLastDevice) && <Pill color="gray">{deviceContextLine(selectedLastDevice)}</Pill>}
+                      {selectedLastDevice.device_id && <Pill color="purple">HWID {shortValue(selectedLastDevice.device_id, 6, 4)}</Pill>}
+                    </div>
+                  )}
                 </div>
-                {selectedDetails && <Pill color={subscriptionStatusColor(selectedDetails.user.status)}>{subscriptionStatusLabel(selectedDetails.user.status)}</Pill>}
               </div>
 
               {detailsLoading ? (
@@ -558,24 +740,15 @@ export default function SubscriptionsPage() {
               ) : (
                 <div className="space-y-5">
                   <div className="grid gap-3 md:grid-cols-3">
-                    <Card className="bg-[#0c0e16] p-3">
-                      <div className="font-mono text-[10px] uppercase tracking-[0.14em] text-[#2a3355]">Трафик</div>
-                      <div className="mt-1 text-lg font-bold text-[#38bdf8]">{formatBytes(selectedDetails.user.used_traffic)}</div>
-                    </Card>
-                    <Card className="bg-[#0c0e16] p-3">
-                      <div className="font-mono text-[10px] uppercase tracking-[0.14em] text-[#2a3355]">Лимит</div>
-                      <div className="mt-1 text-lg font-bold text-[#fbbf24]">{limitLabel(selectedDetails.user.data_limit)}</div>
-                    </Card>
-                    <Card className="bg-[#0c0e16] p-3">
-                      <div className="font-mono text-[10px] uppercase tracking-[0.14em] text-[#2a3355]">Истекает</div>
-                      <div className="mt-1 text-lg font-bold text-[#4ade80]">{selectedDetails.user.expire ? formatDateTime(unixToIso(selectedDetails.user.expire)) : "без срока"}</div>
-                    </Card>
+                    <InfoTile icon={Network} label="Трафик" value={formatBytes(selectedDetails.user.used_traffic)} color="#38bdf8" />
+                    <InfoTile icon={Database} label="Лимит" value={limitLabel(selectedDetails.user.data_limit)} color="#fbbf24" />
+                    <InfoTile icon={Clock3} label="Истекает" value={selectedDetails.user.expire ? formatDateTime(unixToIso(selectedDetails.user.expire)) : "без срока"} color="#4ade80" />
                   </div>
 
                   <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
                     <div>
-                      <SectionTitle>Фильтр Конфигов</SectionTitle>
-                      <Card className="space-y-3 bg-[#0c0e16] p-4">
+                      <SectionTitle>Фильтр конфигов</SectionTitle>
+                      <div className="space-y-3 rounded-lg border border-[#1a1d2e] bg-[#0c0e16] p-4">
                         <label className="flex items-center gap-3 text-sm text-[#dde2f0]">
                           <input
                             type="checkbox"
@@ -638,19 +811,22 @@ export default function SubscriptionsPage() {
                             Сохранить фильтр
                           </SoftButton>
                         )}
-                      </Card>
+                      </div>
                     </div>
 
                     <div className="space-y-4">
                       <div>
-                        <SectionTitle>Трафик По Нодам</SectionTitle>
-                        <Card className="bg-[#0c0e16] p-4">
+                        <SectionTitle>Трафик по нодам</SectionTitle>
+                        <div className="rounded-lg border border-[#1a1d2e] bg-[#0c0e16] p-4">
                           {selectedDetails.usage.usages?.length ? (
                             <div className="space-y-2">
                               {selectedDetails.usage.usages.map((row) => (
                                 <div key={`${row.node_id ?? "none"}-${row.node_name}`} className="rounded-lg border border-[#1a1d2e] bg-[#111420] px-3 py-2">
                                   <div className="flex items-center justify-between gap-3">
-                                    <span className="truncate text-sm text-[#dde2f0]">{row.node_name}</span>
+                                    <div className="flex min-w-0 items-center gap-2">
+                                      <Server size={13} className="shrink-0 text-[#4a5170]" />
+                                      <span className="truncate text-sm text-[#dde2f0]">{row.node_name}</span>
+                                    </div>
                                     <span className="font-mono text-xs text-[#38bdf8]">{formatBytes(row.used_traffic)}</span>
                                   </div>
                                 </div>
@@ -659,35 +835,29 @@ export default function SubscriptionsPage() {
                           ) : (
                             <div className="font-mono text-xs text-[#2a3355]">Нет usage-данных по нодам.</div>
                           )}
-                        </Card>
+                        </div>
                       </div>
 
                       <div>
-                        <SectionTitle>История Устройств</SectionTitle>
-                        <Card className="bg-[#0c0e16] p-4">
+                        <SectionTitle>История устройств</SectionTitle>
+                        <div className="rounded-lg border border-[#1a1d2e] bg-[#0c0e16] p-4">
                           {selectedDetails.device_history.length ? (
                             <div className="space-y-2">
                               {selectedDetails.device_history.map((item, index) => (
-                                <div key={`${item.ip ?? "ip"}-${item.timestamp}-${index}`} className="rounded-lg border border-[#1a1d2e] bg-[#111420] px-3 py-2">
-                                  <div className="truncate text-xs text-[#dde2f0]">{item.user_agent || "unknown user-agent"}</div>
-                                  <div className="mt-1 flex items-center justify-between gap-3 font-mono text-[10px] text-[#2a3355]">
-                                    <span>{item.ip || "ip неизвестен"}</span>
-                                    <span>{formatFullDateTime(new Date(item.timestamp * 1000).toISOString())}</span>
-                                  </div>
-                                </div>
+                                <DeviceHistoryRow key={`${item.ip ?? "ip"}-${item.timestamp}-${index}`} item={item} />
                               ))}
                             </div>
                           ) : (
                             <div className="font-mono text-xs text-[#2a3355]">История устройств пока пуста.</div>
                           )}
-                        </Card>
+                        </div>
                       </div>
                     </div>
                   </div>
 
                   <div>
-                    <SectionTitle>Per-User Extra Конфиги</SectionTitle>
-                    <Card className="space-y-4 bg-[#0c0e16] p-4">
+                    <SectionTitle>Персональные extra-конфиги</SectionTitle>
+                    <div className="space-y-4 rounded-lg border border-[#1a1d2e] bg-[#0c0e16] p-4">
                       <div className="grid gap-3 lg:grid-cols-[1fr_1fr_auto]">
                         <Field label="Имя">
                           <TextInput value={newPerUserName} onChange={setNewPerUserName} placeholder="Например: backup link" disabled={!canEdit} />
@@ -730,7 +900,7 @@ export default function SubscriptionsPage() {
                           ))}
                         </div>
                       )}
-                    </Card>
+                    </div>
                   </div>
                 </div>
               )}
@@ -738,7 +908,7 @@ export default function SubscriptionsPage() {
 
             <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
               <div>
-                <SectionTitle>Global Extra Конфиги</SectionTitle>
+                <SectionTitle>Глобальные extra-конфиги</SectionTitle>
                 <Card className="space-y-4 p-4">
                   <div className="grid gap-3 lg:grid-cols-[1fr_1fr_auto_auto]">
                     <Field label="Имя">
@@ -755,7 +925,7 @@ export default function SubscriptionsPage() {
                         onChange={(event) => setNewGlobalEnabled(event.target.checked)}
                         className="h-4 w-4 rounded border-[#252a40] bg-[#111420] text-[#4ade80]"
                       />
-                      enabled
+                      включен
                     </label>
                     <div className="flex items-end">
                       <SoftButton onClick={addGlobalConfig} disabled={!canEdit || savingGlobalConfig} variant="primary" className="w-full lg:w-auto">
