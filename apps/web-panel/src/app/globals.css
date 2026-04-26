@@ -87,3 +87,21 @@ pre,
 .pulse-dot {
   animation: pulseDot 2s ease-in-out infinite;
 }
+
+.browser-terminal,
+.browser-terminal .xterm {
+  height: 100%;
+}
+
+.browser-terminal .xterm {
+  padding: 12px;
+}
+
+.browser-terminal .xterm-viewport,
+.browser-terminal .xterm-screen {
+  background: transparent !important;
+}
+
+.browser-terminal .xterm-viewport {
+  scrollbar-width: thin;
+}

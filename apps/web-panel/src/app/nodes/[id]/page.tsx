@@ -2,7 +2,9 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { AlertTriangle, ArrowUpCircle, Loader2, Play, Power, RefreshCw, Send, Square, Terminal, Trash2, X } from "lucide-react";
+import type { IDisposable, Terminal as XTermTerminal } from "@xterm/xterm";
+import type { FitAddon as XTermFitAddon } from "@xterm/addon-fit";
+import { AlertTriangle, ArrowUpCircle, Loader2, Play, Power, RefreshCw, Square, Terminal as TerminalIcon, Trash2, X } from "lucide-react";
 import Layout from "@/components/Layout";
 import { api, Container, isAgentOutdated, Node, NodeEvent, NodeMetric, Port, Task, VersionInfo } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
@@ -12,6 +14,7 @@ import { type LiveEvent, useLiveReload } from "@/lib/live";
 import { Card, DataTable, LineChart, MetricBar, Pill, SectionTitle, SeverityBadge, SoftButton, StatusDot, StatusPill } from "@/components/ui";
 
 type Tab = "overview" | "docker" | "ports" | "tasks" | "events" | "terminal";
+type TerminalStatus = "idle" | "connecting" | "waiting" | "connected" | "closed" | "error";
 
 const TAB_LABELS: Record<Tab, string> = {
   overview: "Обзор",
@@ -114,11 +117,49 @@ export default function NodeDetailPage() {
   const [updateLoading, setUpdateLoading] = useState(false);
   const [updateMsg, setUpdateMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const terminalSocketRef = useRef<WebSocket | null>(null);
-  const terminalOutputRef = useRef<HTMLPreElement | null>(null);
-  const [terminalStatus, setTerminalStatus] = useState<"idle" | "connecting" | "waiting" | "connected" | "closed" | "error">("idle");
-  const [terminalOutput, setTerminalOutput] = useState("");
-  const [terminalInput, setTerminalInput] = useState("");
+  const terminalOutputRef = useRef<HTMLDivElement | null>(null);
+  const terminalInstanceRef = useRef<XTermTerminal | null>(null);
+  const terminalFitAddonRef = useRef<XTermFitAddon | null>(null);
+  const terminalInputDisposableRef = useRef<IDisposable | null>(null);
+  const terminalResizeObserverRef = useRef<ResizeObserver | null>(null);
+  const terminalPendingOutputRef = useRef<string[]>([]);
+  const [terminalStatus, setTerminalStatus] = useState<TerminalStatus>("idle");
   const [terminalError, setTerminalError] = useState<string | null>(null);
+  const terminalTabVisited = visitedTabs.has("terminal");
+
+  const writeTerminal = useCallback((value: string) => {
+    const terminal = terminalInstanceRef.current;
+    if (terminal) {
+      terminal.write(value);
+      return;
+    }
+    terminalPendingOutputRef.current.push(value);
+  }, []);
+
+  const writeTerminalSystem = useCallback((message: string) => {
+    writeTerminal(`\r\n[${message}]\r\n`);
+  }, [writeTerminal]);
+
+  const clearTerminal = useCallback(() => {
+    terminalPendingOutputRef.current = [];
+    terminalInstanceRef.current?.clear();
+  }, []);
+
+  const fitTerminal = useCallback((sendResize = true) => {
+    const terminal = terminalInstanceRef.current;
+    const fitAddon = terminalFitAddonRef.current;
+    if (!terminal || !fitAddon) return;
+    try {
+      fitAddon.fit();
+    } catch {
+      return;
+    }
+    if (!sendResize) return;
+    const socket = terminalSocketRef.current;
+    if (socket && socket.readyState === WebSocket.OPEN && terminal.cols > 0 && terminal.rows > 0) {
+      socket.send(JSON.stringify({ type: "resize", cols: terminal.cols, rows: terminal.rows }));
+    }
+  }, []);
 
   const load = useCallback(async () => {
     const token = localStorage.getItem("token");
@@ -152,10 +193,101 @@ export default function NodeDetailPage() {
     api.version().then(setVersionInfo).catch(() => null);
   }, []);
   useEffect(() => {
+    if (!terminalTabVisited || terminalInstanceRef.current || !terminalOutputRef.current) return;
+    let disposed = false;
+
+    void Promise.all([import("@xterm/xterm"), import("@xterm/addon-fit")])
+      .then(([xtermModule, fitModule]) => {
+        if (disposed || !terminalOutputRef.current || terminalInstanceRef.current) return;
+
+        const terminal = new xtermModule.Terminal({
+          allowTransparency: true,
+          cursorBlink: true,
+          cursorStyle: "block",
+          fontFamily: '"JetBrains Mono", "Cascadia Code", "Source Code Pro", ui-monospace, SFMono-Regular, monospace',
+          fontSize: 12,
+          lineHeight: 1.35,
+          scrollback: 5000,
+          theme: {
+            background: "#05070b",
+            foreground: "#d8ffe3",
+            cursor: "#4ade80",
+            selectionBackground: "#1d3d2c",
+            black: "#05070b",
+            red: "#f87171",
+            green: "#4ade80",
+            yellow: "#fbbf24",
+            blue: "#38bdf8",
+            magenta: "#a78bfa",
+            cyan: "#22d3ee",
+            white: "#dde2f0",
+            brightBlack: "#4a5170",
+            brightRed: "#fb7185",
+            brightGreen: "#86efac",
+            brightYellow: "#fde68a",
+            brightBlue: "#7dd3fc",
+            brightMagenta: "#c4b5fd",
+            brightCyan: "#67e8f9",
+            brightWhite: "#f8fafc",
+          },
+        });
+        const fitAddon = new fitModule.FitAddon();
+        terminal.loadAddon(fitAddon);
+        terminal.open(terminalOutputRef.current);
+
+        terminalInstanceRef.current = terminal;
+        terminalFitAddonRef.current = fitAddon;
+        terminalInputDisposableRef.current = terminal.onData((data) => {
+          const socket = terminalSocketRef.current;
+          if (socket && socket.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify({ type: "input", data }));
+          }
+        });
+
+        const pendingOutput = terminalPendingOutputRef.current.splice(0);
+        pendingOutput.forEach((chunk) => terminal.write(chunk));
+
+        const resizeObserver = new ResizeObserver(() => {
+          window.requestAnimationFrame(() => fitTerminal());
+        });
+        resizeObserver.observe(terminalOutputRef.current);
+        terminalResizeObserverRef.current = resizeObserver;
+
+        window.requestAnimationFrame(() => {
+          fitTerminal();
+          terminal.focus();
+        });
+      })
+      .catch(() => {
+        if (!disposed) {
+          setTerminalStatus("error");
+          setTerminalError("Не удалось загрузить terminal emulator");
+        }
+      });
+
+    return () => {
+      disposed = true;
+      terminalResizeObserverRef.current?.disconnect();
+      terminalResizeObserverRef.current = null;
+      terminalInputDisposableRef.current?.dispose();
+      terminalInputDisposableRef.current = null;
+      terminalInstanceRef.current?.dispose();
+      terminalInstanceRef.current = null;
+      terminalFitAddonRef.current = null;
+    };
+  }, [fitTerminal, terminalTabVisited]);
+  useEffect(() => {
     return () => {
       terminalSocketRef.current?.close();
     };
   }, []);
+  useEffect(() => {
+    if (tab !== "terminal") return;
+    window.requestAnimationFrame(() => {
+      fitTerminal();
+      terminalInstanceRef.current?.focus();
+    });
+  }, [fitTerminal, tab]);
   useLiveReload(Boolean(node), load, 1200, shouldReloadLiveEvent);
 
   function selectTab(nextTab: Tab) {
@@ -168,18 +300,11 @@ export default function NodeDetailPage() {
     });
   }
 
-  function appendTerminalOutput(value: string) {
-    setTerminalOutput((current) => (current + value).slice(-60_000));
-    window.setTimeout(() => {
-      terminalOutputRef.current?.scrollTo({ top: terminalOutputRef.current.scrollHeight });
-    }, 0);
-  }
-
   async function openTerminal() {
     if (terminalSocketRef.current && terminalSocketRef.current.readyState === WebSocket.OPEN) return;
     setTerminalStatus("connecting");
     setTerminalError(null);
-    setTerminalOutput("");
+    clearTerminal();
     const sessionKey = `terminal_session_${id}`;
     try {
       const storedId = sessionStorage.getItem(sessionKey);
@@ -195,27 +320,33 @@ export default function NodeDetailPage() {
       if (!wsUrl) throw new Error("Нет токена доступа");
       const socket = new WebSocket(wsUrl);
       terminalSocketRef.current = socket;
-      socket.onopen = () => setTerminalStatus("connecting");
+      socket.onopen = () => {
+        setTerminalStatus("connecting");
+        fitTerminal();
+        terminalInstanceRef.current?.focus();
+      };
       socket.onmessage = (event) => {
-        let message: { type: string; status?: typeof terminalStatus; data?: string; message?: string; code?: number };
+        let message: { type: string; status?: TerminalStatus; data?: string; message?: string; code?: number };
         try {
           message = JSON.parse(event.data);
         } catch {
           return;
         }
         if (message.type === "output" && message.data) {
-          appendTerminalOutput(message.data);
+          writeTerminal(message.data);
           return;
         }
         if (message.type === "status") {
           setTerminalStatus(message.status ?? "connected");
-          if (message.message) appendTerminalOutput(`\n[${message.message}]\n`);
+          if (message.message) writeTerminalSystem(message.message);
+          fitTerminal();
+          terminalInstanceRef.current?.focus();
           return;
         }
         if (message.type === "exit") {
           setTerminalStatus("closed");
           sessionStorage.removeItem(sessionKey);
-          appendTerminalOutput(`\n[${message.message ?? `Shell exited with code ${message.code ?? 0}`}]\n`);
+          writeTerminalSystem(message.message ?? `Shell exited with code ${message.code ?? 0}`);
           return;
         }
         if (message.type === "close") {
@@ -227,12 +358,14 @@ export default function NodeDetailPage() {
           sessionStorage.removeItem(sessionKey);
           setTerminalStatus("error");
           setTerminalError(message.message ?? "Terminal error");
+          writeTerminalSystem(message.message ?? "Terminal error");
         }
       };
       socket.onerror = () => {
         sessionStorage.removeItem(sessionKey);
         setTerminalStatus("error");
         setTerminalError("WebSocket connection failed");
+        writeTerminalSystem("WebSocket connection failed");
       };
       socket.onclose = () => {
         terminalSocketRef.current = null;
@@ -240,8 +373,10 @@ export default function NodeDetailPage() {
       };
     } catch (err: unknown) {
       sessionStorage.removeItem(sessionKey);
+      const message = err instanceof Error ? err.message : "Не удалось открыть SSH";
       setTerminalStatus("error");
-      setTerminalError(err instanceof Error ? err.message : "Не удалось открыть SSH");
+      setTerminalError(message);
+      writeTerminalSystem(message);
     }
   }
 
@@ -256,18 +391,11 @@ export default function NodeDetailPage() {
     setTerminalStatus("closed");
   }
 
-  function sendTerminalInput() {
-    const value = terminalInput;
-    const socket = terminalSocketRef.current;
-    if (!value || !socket || socket.readyState !== WebSocket.OPEN) return;
-    socket.send(JSON.stringify({ type: "input", data: `${value}\n` }));
-    setTerminalInput("");
-  }
-
   function sendTerminalInterrupt() {
     const socket = terminalSocketRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN) return;
     socket.send(JSON.stringify({ type: "input", data: "\u0003" }));
+    terminalInstanceRef.current?.focus();
   }
 
   async function handleUpdateAgent() {
@@ -526,7 +654,7 @@ export default function NodeDetailPage() {
             <Card className="overflow-hidden">
               <div className="flex flex-col gap-3 border-b border-[#1a1d2e] px-4 py-3 md:flex-row md:items-center md:justify-between">
                 <div className="flex items-center gap-3">
-                  <Terminal size={16} className="text-[#4ade80]" />
+                  <TerminalIcon size={16} className="text-[#4ade80]" />
                   <div>
                     <div className="text-sm font-semibold text-[#dde2f0]">Browser SSH</div>
                     <div className="font-mono text-[10px] text-[#4a5170]">{node.name}</div>
@@ -541,7 +669,7 @@ export default function NodeDetailPage() {
                     <SoftButton onClick={closeTerminal} variant="danger"><X size={14} /> Закрыть</SoftButton>
                   ) : (
                     <SoftButton onClick={() => void openTerminal()} disabled={!canOperate || node.status !== "online" || !supportsTerminal || terminalStatus === "connecting"} variant="primary">
-                      {terminalStatus === "connecting" ? <Loader2 size={14} className="animate-spin" /> : <Terminal size={14} />}
+                      {terminalStatus === "connecting" ? <Loader2 size={14} className="animate-spin" /> : <TerminalIcon size={14} />}
                       Открыть SSH
                     </SoftButton>
                   )}
@@ -561,27 +689,12 @@ export default function NodeDetailPage() {
                 <div className="border-b border-[#1a1d2e] px-4 py-3 font-mono text-xs text-[#f87171]">{terminalError}</div>
               )}
 
-              <pre ref={terminalOutputRef} className="h-[420px] overflow-auto bg-[#05070b] p-4 font-mono text-xs leading-5 text-[#d8ffe3]">
-                {terminalOutput || "Нажми «Открыть SSH», чтобы создать WebSocket-сессию через агента.\n"}
-              </pre>
-              <div className="flex gap-2 border-t border-[#1a1d2e] bg-[#080a11] p-3">
-                <input
-                  value={terminalInput}
-                  onChange={(event) => setTerminalInput(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                      sendTerminalInput();
-                    }
-                  }}
-                  disabled={terminalStatus !== "connected"}
-                  className="min-w-0 flex-1 rounded-lg border border-[#1d2135] bg-[#0c0e16] px-3 py-2 font-mono text-xs text-[#dde2f0] outline-none transition placeholder:text-[#2a3355] focus:border-[#4ade80]/70 disabled:opacity-50"
-                  placeholder={terminalStatus === "connected" ? "Введите команду..." : "Ожидание подключения..."}
+              <div className="h-[460px] bg-[#05070b] p-0">
+                <div
+                  ref={terminalOutputRef}
+                  className="browser-terminal h-full overflow-hidden bg-[#05070b]"
+                  onClick={() => terminalInstanceRef.current?.focus()}
                 />
-                <SoftButton onClick={sendTerminalInput} disabled={terminalStatus !== "connected" || !terminalInput} variant="blue">
-                  <Send size={14} />
-                  Выполнить
-                </SoftButton>
               </div>
             </Card>
           </TabPanel>

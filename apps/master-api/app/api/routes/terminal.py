@@ -16,6 +16,9 @@ from app.services.terminal import TerminalSession, terminal_hub
 
 router = APIRouter(tags=["terminal"])
 
+BROWSER_TERMINAL_MESSAGE_TYPES = {"input", "resize", "close"}
+AGENT_TERMINAL_MESSAGE_TYPES = {"output", "status", "exit", "error", "close"}
+
 
 class TerminalSessionCreate(BaseModel):
     shell: str | None = None
@@ -39,7 +42,7 @@ async def _send_queue_to_websocket(queue: asyncio.Queue[str], websocket: WebSock
             return
 
 
-async def _receive_websocket_to_queue(websocket: WebSocket, queue: asyncio.Queue[str]) -> None:
+async def _receive_websocket_to_queue(websocket: WebSocket, queue: asyncio.Queue[str], allowed_types: set[str]) -> None:
     while True:
         raw = await websocket.receive_text()
         try:
@@ -47,7 +50,7 @@ async def _receive_websocket_to_queue(websocket: WebSocket, queue: asyncio.Queue
         except json.JSONDecodeError:
             continue
         message_type = message.get("type")
-        if message_type not in {"input", "resize", "close"}:
+        if message_type not in allowed_types:
             continue
         await queue.put(json.dumps(message))
         if message_type == "close":
@@ -57,7 +60,8 @@ async def _receive_websocket_to_queue(websocket: WebSocket, queue: asyncio.Queue
 async def _bridge_session(session: TerminalSession, websocket: WebSocket, *, from_browser: bool) -> None:
     incoming = session.browser_to_agent if from_browser else session.agent_to_browser
     outgoing = session.agent_to_browser if from_browser else session.browser_to_agent
-    reader = asyncio.create_task(_receive_websocket_to_queue(websocket, incoming))
+    allowed_types = BROWSER_TERMINAL_MESSAGE_TYPES if from_browser else AGENT_TERMINAL_MESSAGE_TYPES
+    reader = asyncio.create_task(_receive_websocket_to_queue(websocket, incoming, allowed_types))
     writer = asyncio.create_task(_send_queue_to_websocket(outgoing, websocket))
     done, pending = await asyncio.wait({reader, writer}, return_when=asyncio.FIRST_COMPLETED)
     for task in pending:
