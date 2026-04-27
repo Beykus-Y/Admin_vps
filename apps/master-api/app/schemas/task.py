@@ -21,6 +21,9 @@ ALLOWED_TASK_TYPES = {
     "system.reboot",
     "agent.update",
     "master.update",
+    "diagnostics.processes",
+    "diagnostics.disk_usage",
+    "diagnostics.find_files",
 }
 
 

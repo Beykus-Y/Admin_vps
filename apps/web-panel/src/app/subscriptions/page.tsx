@@ -26,6 +26,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import Layout from "@/components/Layout";
+import MarkdownAnswer from "@/components/MarkdownAnswer";
 import { Card, Pill, SearchBar, SectionTitle, SoftButton, StatCard } from "@/components/ui";
 import {
   api,
@@ -912,6 +913,7 @@ export default function SubscriptionsPage() {
                 <textarea
                   value={vpnAiQuestion}
                   onChange={(event) => setVpnAiQuestion(event.target.value)}
+                  spellCheck={false}
                   className="min-h-[84px] w-full rounded-lg border border-[#1d2135] bg-[#0c0e16] px-3 py-2.5 text-sm text-[#dde2f0] outline-none transition placeholder:text-[#2a3355] focus:border-[#a78bfa]/70"
                   placeholder="Спроси про VPN: активных клиентов, лишние ноды, средний расход, группы тарификации..."
                 />
@@ -924,6 +926,8 @@ export default function SubscriptionsPage() {
                     <option value="24h">24 часа</option>
                     <option value="7d">7 дней</option>
                     <option value="30d">30 дней</option>
+                    <option value="current_month">С 1 числа</option>
+                    <option value="previous_month">Прошлый месяц</option>
                     <option value="all">Все время</option>
                   </select>
                   <label className="flex items-center gap-2 text-sm text-[#8892b0]">
@@ -942,7 +946,7 @@ export default function SubscriptionsPage() {
                 </div>
                 <div className="font-mono text-[10px] text-[#2a3355]">Контекст: Marzban users/nodes/usage, MGBoost фильтры, устройства и настройки тарификации нод.</div>
                 {vpnAiError && <div className="rounded-lg border border-[#f87171]/20 bg-[#f87171]/[0.07] p-3 font-mono text-xs text-[#f87171]">{vpnAiError}</div>}
-                {vpnAiAnswer && <div className="whitespace-pre-wrap rounded-lg border border-[#1a1d2e] bg-[#10131d] p-4 text-sm leading-6 text-[#dde2f0]">{vpnAiAnswer}</div>}
+                {vpnAiAnswer && <MarkdownAnswer>{vpnAiAnswer}</MarkdownAnswer>}
               </div>
             </div>
           </Card>

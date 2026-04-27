@@ -21,7 +21,7 @@ def _chat_completions_url(base_url: str) -> str:
     return f"{value}/chat/completions"
 
 
-async def call_llm(db, *, system_prompt: str, user_prompt: str) -> tuple[str, str]:
+async def call_llm_message(db, *, messages: list[dict], tools: list[dict] | None = None) -> tuple[dict, str]:
     settings = await get_llm_settings(db)
     base_url = (settings.get("base_url") or "").strip()
     api_key = (settings.get("api_key") or "").strip()
@@ -37,12 +37,12 @@ async def call_llm(db, *, system_prompt: str, user_prompt: str) -> tuple[str, st
 
     payload = {
         "model": model,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
+        "messages": messages,
         "temperature": 0.2,
     }
+    if tools:
+        payload["tools"] = tools
+        payload["tool_choice"] = "auto"
 
     try:
         async with httpx.AsyncClient(timeout=timeout_seconds) as client:
@@ -60,10 +60,22 @@ async def call_llm(db, *, system_prompt: str, user_prompt: str) -> tuple[str, st
 
     try:
         data = response.json()
-        content = data["choices"][0]["message"]["content"]
+        message = data["choices"][0]["message"]
     except (ValueError, KeyError, IndexError, TypeError) as exc:
         raise LLMClientError(502, "LLM provider returned invalid chat completion response") from exc
 
+    return message, model
+
+
+async def call_llm(db, *, system_prompt: str, user_prompt: str) -> tuple[str, str]:
+    message, model = await call_llm_message(
+        db,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+    )
+    content = message.get("content") or ""
     return str(content).strip(), model
 
 

@@ -25,6 +25,9 @@ var supportedTaskTypes = []string{
 	"system.reboot",
 	"agent.update",
 	"master.update",
+	"diagnostics.processes",
+	"diagnostics.disk_usage",
+	"diagnostics.find_files",
 	"terminal.session",
 }
 
@@ -58,6 +61,12 @@ func Execute(ctx context.Context, task agentclient.Task) (map[string]any, error)
 		return selfUpdate(ctx, task.Payload)
 	case "master.update":
 		return masterUpdate(ctx, task.Payload)
+	case "diagnostics.processes":
+		return diagnosticsProcesses(ctx, task.Payload)
+	case "diagnostics.disk_usage":
+		return diagnosticsDiskUsage(ctx, task.Payload)
+	case "diagnostics.find_files":
+		return diagnosticsFindFiles(ctx, task.Payload)
 	default:
 		return nil, fmt.Errorf("unknown task type: %s", task.Type)
 	}

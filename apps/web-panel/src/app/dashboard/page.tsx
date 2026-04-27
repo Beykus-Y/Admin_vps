@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AlertTriangle, Bot, CheckCircle, Clock3, Loader2, RadioTower, Send, Server } from "lucide-react";
 import Layout from "@/components/Layout";
+import MarkdownAnswer from "@/components/MarkdownAnswer";
 import { api, Overview } from "@/lib/api";
 import { flattenContainers, flattenEvents, flattenPorts, InventoryNode, isMasterNode, loadInventory, primaryNodeIP } from "@/lib/inventory";
 import { formatBytes, formatDateTime, formatNumber, formatPercent, formatRelativeTime, statusLabel } from "@/lib/format";
@@ -234,6 +235,7 @@ export default function DashboardPage() {
                 <textarea
                   value={aiQuestion}
                   onChange={(event) => setAiQuestion(event.target.value)}
+                  spellCheck={false}
                   className="min-h-[84px] w-full rounded-lg border border-[#1d2135] bg-[#0c0e16] px-3 py-2.5 text-sm text-[#dde2f0] outline-none transition placeholder:text-[#2a3355] focus:border-[#a78bfa]/70"
                   placeholder="Спроси про VPS: какие перегружены, что можно убрать, где риск по портам..."
                 />
@@ -245,7 +247,7 @@ export default function DashboardPage() {
                   <div className="font-mono text-[10px] text-[#2a3355]">Контекст: ноды, метрики, контейнеры, порты, алерты, события.</div>
                 </div>
                 {aiError && <div className="rounded-lg border border-[#f87171]/20 bg-[#f87171]/[0.07] p-3 font-mono text-xs text-[#f87171]">{aiError}</div>}
-                {aiAnswer && <div className="whitespace-pre-wrap rounded-lg border border-[#1a1d2e] bg-[#10131d] p-4 text-sm leading-6 text-[#dde2f0]">{aiAnswer}</div>}
+                {aiAnswer && <MarkdownAnswer>{aiAnswer}</MarkdownAnswer>}
               </div>
             </div>
           </Card>
