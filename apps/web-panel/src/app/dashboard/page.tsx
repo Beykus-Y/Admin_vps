@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { AlertTriangle, Bot, CheckCircle, Clock3, Loader2, RadioTower, Send, Server } from "lucide-react";
 import Layout from "@/components/Layout";
 import MarkdownAnswer from "@/components/MarkdownAnswer";
-import { api, Overview } from "@/lib/api";
+import { api, ApiError, Overview } from "@/lib/api";
 import { flattenContainers, flattenEvents, flattenPorts, InventoryNode, isMasterNode, loadInventory, primaryNodeIP } from "@/lib/inventory";
 import { formatBytes, formatDateTime, formatNumber, formatPercent, formatRelativeTime, statusLabel } from "@/lib/format";
 import { Card, MetricBar, Pill, SectionTitle, SeverityBadge, SoftButton, SparkBars, StatCard, StatusDot } from "@/components/ui";
@@ -133,9 +133,9 @@ export default function DashboardPage() {
         setError("");
       })
       .catch((err: unknown) => {
+        if (err instanceof ApiError && err.status === 401) { router.push("/login"); return; }
         const message = err instanceof Error ? err.message : "Не удалось загрузить обзор";
-        if (message.includes("401")) router.push("/login");
-        else setError(message);
+        setError(message);
       });
   }, [router]);
 
@@ -143,7 +143,7 @@ export default function DashboardPage() {
     void load();
   }, [load]);
 
-  useLiveReload(Boolean(overview), load);
+  useLiveReload(Boolean(overview) && !aiLoading, load);
 
   async function askInfrastructureAI() {
     const question = aiQuestion.trim();
@@ -248,7 +248,7 @@ export default function DashboardPage() {
                 </div>
                 {aiLoading && <div className="font-mono text-[10px] text-[#5c6687]">LLM собирает данные и может вызывать read-only tools. Максимум ожидания: около 3 минут.</div>}
                 {aiError && <div className="rounded-lg border border-[#f87171]/20 bg-[#f87171]/[0.07] p-3 font-mono text-xs text-[#f87171]">{aiError}</div>}
-                {aiAnswer && <MarkdownAnswer>{aiAnswer}</MarkdownAnswer>}
+                {!aiLoading && aiAnswer !== "" && <MarkdownAnswer>{aiAnswer}</MarkdownAnswer>}
               </div>
             </div>
           </Card>

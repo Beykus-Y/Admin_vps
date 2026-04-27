@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { api, AuthUser } from "@/lib/api";
+import { api, ApiError, AuthUser } from "@/lib/api";
 
 interface AuthContextValue {
   user: AuthUser | null;
@@ -26,8 +26,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const current = await api.auth.me();
       setUser(current);
-    } catch {
-      localStorage.removeItem("token");
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        localStorage.removeItem("token");
+      }
       setUser(null);
     } finally {
       setLoading(false);

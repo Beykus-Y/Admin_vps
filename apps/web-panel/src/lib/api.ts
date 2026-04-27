@@ -41,6 +41,13 @@ function buildQuery(params: Record<string, string | number | boolean | undefined
   return query ? `?${query}` : "";
 }
 
+export class ApiError extends Error {
+  constructor(message: string, public readonly status: number) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
 async function request<T>(path: string, options: RequestInit = {}, timeoutMs = 0): Promise<T> {
   const token = getToken();
   const headers: HeadersInit = {
@@ -58,7 +65,7 @@ async function request<T>(path: string, options: RequestInit = {}, timeoutMs = 0
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: res.statusText }));
-      throw new Error(err.detail || "Запрос не выполнен");
+      throw new ApiError(err.detail || "Запрос не выполнен", res.status);
     }
     if (res.status === 204) return undefined as T;
     return res.json();

@@ -947,7 +947,7 @@ export default function SubscriptionsPage() {
                 <div className="font-mono text-[10px] text-[#2a3355]">Контекст: Marzban users/nodes/usage, MGBoost фильтры, устройства и настройки тарификации нод.</div>
                 {vpnAiLoading && <div className="font-mono text-[10px] text-[#5c6687]">LLM собирает VPN-данные и может вызывать read-only tools. Максимум ожидания: около 3 минут.</div>}
                 {vpnAiError && <div className="rounded-lg border border-[#f87171]/20 bg-[#f87171]/[0.07] p-3 font-mono text-xs text-[#f87171]">{vpnAiError}</div>}
-                {vpnAiAnswer && <MarkdownAnswer>{vpnAiAnswer}</MarkdownAnswer>}
+                {!vpnAiLoading && vpnAiAnswer !== "" && <MarkdownAnswer>{vpnAiAnswer}</MarkdownAnswer>}
               </div>
             </div>
           </Card>

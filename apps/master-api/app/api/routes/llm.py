@@ -565,7 +565,7 @@ async def analyze_infrastructure(body: LLMAskRequest, _: CurrentOperator, db: DB
         raise HTTPException(status_code=504, detail="LLM-анализ VPS превысил лимит времени. Попробуйте сузить вопрос или снизить timeout модели.")
     except LLMClientError as exc:
         _raise_llm_error(exc)
-    return {"scope": "infrastructure", "model": model, "answer": answer, "sources": ["FilinControl inventory", "metrics", "ports", "containers", "events", "alerts", "read-only agent diagnostics"]}
+    return {"scope": "infrastructure", "model": model, "answer": answer or "LLM завершил анализ, но не вернул текстовый ответ. Попробуйте перефразировать вопрос.", "sources": ["FilinControl inventory", "metrics", "ports", "containers", "events", "alerts", "read-only agent diagnostics"]}
 
 
 @router.post("/vpn")
@@ -592,4 +592,4 @@ async def analyze_vpn(body: LLMAskRequest, _: CurrentOperator, db: DB):
         raise HTTPException(status_code=504, detail="LLM-анализ VPN превысил лимит времени. Попробуйте сузить вопрос или выключить глубокий анализ пользователей.")
     except LLMClientError as exc:
         _raise_llm_error(exc)
-    return {"scope": "vpn", "model": model, "answer": answer, "sources": ["Marzban via MGBoost", "MGBoost node settings", "MGBoost device/request metadata", "read-only VPN analytics tools"]}
+    return {"scope": "vpn", "model": model, "answer": answer or "LLM завершил анализ, но не вернул текстовый ответ. Попробуйте перефразировать вопрос.", "sources": ["Marzban via MGBoost", "MGBoost node settings", "MGBoost device/request metadata", "read-only VPN analytics tools"]}
