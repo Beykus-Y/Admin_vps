@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import agent, alerts, audit, auth, events, inventory, llm, master, nodes, overview, settings as settings_routes, stream, subproxy, terminal, version
 from app.core.config import settings
+from app.core.redis import close_redis
 from app.db.base import AsyncSessionLocal
 from app.services.alerts import ensure_default_alert_rules
 from app.services.node_monitor import run_monitor
@@ -23,6 +24,7 @@ async def lifespan(app: FastAPI):
         await monitor_task
     except asyncio.CancelledError:
         pass
+    await close_redis()
 
 
 app = FastAPI(title="FilinControl API", version=settings.app_version, lifespan=lifespan)
