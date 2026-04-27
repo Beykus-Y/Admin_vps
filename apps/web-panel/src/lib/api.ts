@@ -483,6 +483,28 @@ export interface TelegramBotSettingsUpdate {
   allowed_chat_ids: number[];
 }
 
+export interface LLMSettings {
+  base_url: string;
+  api_key_set: boolean;
+  model: string;
+  timeout_seconds: number;
+}
+
+export interface LLMSettingsUpdate {
+  base_url: string;
+  api_key?: string | null;
+  clear_api_key?: boolean;
+  model: string;
+  timeout_seconds: number;
+}
+
+export interface LLMAnalysisResponse {
+  scope: "infrastructure" | "vpn";
+  model: string;
+  answer: string;
+  sources: string[];
+}
+
 export const api = {
   login: (username: string, password: string) =>
     request<TokenResponse>("/auth/login", {
@@ -575,6 +597,11 @@ export const api = {
       request<SubProxyConnectionSettings>("/settings/sub-proxy", { method: "PUT", body: JSON.stringify(payload) }),
     testSubProxy: () =>
       request<{ ok: boolean; status: SubProxyStatus }>("/settings/sub-proxy/test", { method: "POST" }),
+    llm: () => request<LLMSettings>("/settings/llm"),
+    saveLLM: (payload: LLMSettingsUpdate) =>
+      request<LLMSettings>("/settings/llm", { method: "PUT", body: JSON.stringify(payload) }),
+    testLLM: () =>
+      request<{ ok: boolean; model: string; answer: string }>("/settings/llm/test", { method: "POST" }),
     telegramBot: () => request<TelegramBotSettings>("/settings/telegram-bot"),
     saveTelegramBot: (payload: TelegramBotSettingsUpdate) =>
       request<TelegramBotSettings>("/settings/telegram-bot", { method: "PUT", body: JSON.stringify(payload) }),
@@ -606,6 +633,13 @@ export const api = {
       request<Task[]>("/nodes/update-agents", { method: "POST" }),
     createTerminalSession: (id: string) =>
       request<TerminalSession>(`/nodes/${id}/terminal/sessions`, { method: "POST", body: JSON.stringify({}) }),
+  },
+
+  llm: {
+    infrastructure: (payload: { question: string }) =>
+      request<LLMAnalysisResponse>("/llm/infrastructure", { method: "POST", body: JSON.stringify(payload) }),
+    vpn: (payload: { question: string; period: string; deep_user_usage: boolean }) =>
+      request<LLMAnalysisResponse>("/llm/vpn", { method: "POST", body: JSON.stringify(payload) }),
   },
   version: async () => {
     const now = Date.now();

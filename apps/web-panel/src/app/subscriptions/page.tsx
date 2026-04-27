@@ -6,6 +6,7 @@ import clsx from "clsx";
 import {
   ChevronDown,
   ChevronUp,
+  Bot,
   CalendarPlus,
   Clock3,
   Database,
@@ -15,6 +16,7 @@ import {
   Plus,
   RefreshCw,
   Save,
+  Send,
   Server,
   Settings2,
   ShieldCheck,
@@ -305,6 +307,12 @@ export default function SubscriptionsPage() {
   const [savingSettings, setSavingSettings] = useState(false);
   const [savingNodeSetting, setSavingNodeSetting] = useState(false);
   const [savingUserAction, setSavingUserAction] = useState(false);
+  const [vpnAiQuestion, setVpnAiQuestion] = useState("Какие VPN-ноды требуют внимания и есть ли кандидаты на удаление?");
+  const [vpnAiPeriod, setVpnAiPeriod] = useState("7d");
+  const [vpnAiDeep, setVpnAiDeep] = useState(false);
+  const [vpnAiAnswer, setVpnAiAnswer] = useState("");
+  const [vpnAiError, setVpnAiError] = useState("");
+  const [vpnAiLoading, setVpnAiLoading] = useState(false);
   const [inboundsLoading, setInboundsLoading] = useState(false);
   const [savingGlobalConfig, setSavingGlobalConfig] = useState(false);
   const [savingPerUserConfig, setSavingPerUserConfig] = useState(false);
@@ -805,6 +813,25 @@ export default function SubscriptionsPage() {
     }
   }
 
+  async function askVpnAI() {
+    const question = vpnAiQuestion.trim();
+    if (!question) return;
+    setVpnAiLoading(true);
+    setVpnAiError("");
+    try {
+      const result = await api.llm.vpn({
+        question,
+        period: vpnAiPeriod,
+        deep_user_usage: vpnAiDeep,
+      });
+      setVpnAiAnswer(result.answer);
+    } catch (err: unknown) {
+      setVpnAiError(err instanceof Error ? err.message : "LLM-анализ VPN не удался");
+    } finally {
+      setVpnAiLoading(false);
+    }
+  }
+
   if (loading) {
     return (
       <Layout>
@@ -872,6 +899,53 @@ export default function SubscriptionsPage() {
           <StatCard label="С фильтром" value={formatNumber(status?.counts.filtered_users ?? 0)} sub="режим частичной подписки" color="#fbbf24" />
           <StatCard label="Extra конфиги" value={formatNumber(status?.counts.per_user_configs ?? 0)} sub={`${status?.counts.global_enabled_configs ?? 0} глобально включено`} color="#818cf8" />
           <StatCard label="Ноды" value={formatNumber(status?.nodes.length ?? 0)} sub={`${onlineNodes} онлайн`} color={onlineNodes > 0 ? "#4ade80" : "#4a5170"} />
+        </div>
+
+        <div>
+          <SectionTitle>LLM-анализ VPN</SectionTitle>
+          <Card className="p-4">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-start">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-[#1d2135] bg-[#10131d] text-[#a78bfa]">
+                <Bot size={18} />
+              </div>
+              <div className="min-w-0 flex-1 space-y-3">
+                <textarea
+                  value={vpnAiQuestion}
+                  onChange={(event) => setVpnAiQuestion(event.target.value)}
+                  className="min-h-[84px] w-full rounded-lg border border-[#1d2135] bg-[#0c0e16] px-3 py-2.5 text-sm text-[#dde2f0] outline-none transition placeholder:text-[#2a3355] focus:border-[#a78bfa]/70"
+                  placeholder="Спроси про VPN: активных клиентов, лишние ноды, средний расход, группы тарификации..."
+                />
+                <div className="flex flex-col gap-2 md:flex-row md:items-center">
+                  <select
+                    value={vpnAiPeriod}
+                    onChange={(event) => setVpnAiPeriod(event.target.value)}
+                    className="rounded-lg border border-[#1d2135] bg-[#0c0e16] px-3 py-2 text-sm text-[#dde2f0] outline-none focus:border-[#a78bfa]/70"
+                  >
+                    <option value="24h">24 часа</option>
+                    <option value="7d">7 дней</option>
+                    <option value="30d">30 дней</option>
+                    <option value="all">Все время</option>
+                  </select>
+                  <label className="flex items-center gap-2 text-sm text-[#8892b0]">
+                    <input
+                      type="checkbox"
+                      checked={vpnAiDeep}
+                      onChange={(event) => setVpnAiDeep(event.target.checked)}
+                      className="h-4 w-4 rounded border-[#252a40] bg-[#111420] text-[#4ade80]"
+                    />
+                    глубокий анализ пользователей (медленнее)
+                  </label>
+                  <SoftButton onClick={askVpnAI} disabled={vpnAiLoading} variant="primary">
+                    {vpnAiLoading ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />}
+                    Спросить по VPN
+                  </SoftButton>
+                </div>
+                <div className="font-mono text-[10px] text-[#2a3355]">Контекст: Marzban users/nodes/usage, MGBoost фильтры, устройства и настройки тарификации нод.</div>
+                {vpnAiError && <div className="rounded-lg border border-[#f87171]/20 bg-[#f87171]/[0.07] p-3 font-mono text-xs text-[#f87171]">{vpnAiError}</div>}
+                {vpnAiAnswer && <div className="whitespace-pre-wrap rounded-lg border border-[#1a1d2e] bg-[#10131d] p-4 text-sm leading-6 text-[#dde2f0]">{vpnAiAnswer}</div>}
+              </div>
+            </div>
+          </Card>
         </div>
 
         <div>

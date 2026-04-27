@@ -3,12 +3,12 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { AlertTriangle, CheckCircle, Clock3, RadioTower, Server } from "lucide-react";
+import { AlertTriangle, Bot, CheckCircle, Clock3, Loader2, RadioTower, Send, Server } from "lucide-react";
 import Layout from "@/components/Layout";
 import { api, Overview } from "@/lib/api";
 import { flattenContainers, flattenEvents, flattenPorts, InventoryNode, isMasterNode, loadInventory, primaryNodeIP } from "@/lib/inventory";
 import { formatBytes, formatDateTime, formatNumber, formatPercent, formatRelativeTime, statusLabel } from "@/lib/format";
-import { Card, MetricBar, Pill, SectionTitle, SeverityBadge, SparkBars, StatCard, StatusDot } from "@/components/ui";
+import { Card, MetricBar, Pill, SectionTitle, SeverityBadge, SoftButton, SparkBars, StatCard, StatusDot } from "@/components/ui";
 import { useLiveReload } from "@/lib/live";
 
 function average(values: number[]): number | null {
@@ -113,6 +113,10 @@ export default function DashboardPage() {
   const [overview, setOverview] = useState<Overview | null>(null);
   const [inventory, setInventory] = useState<InventoryNode[]>([]);
   const [error, setError] = useState("");
+  const [aiQuestion, setAiQuestion] = useState("Какие VPS требуют внимания и что можно оптимизировать?");
+  const [aiAnswer, setAiAnswer] = useState("");
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState("");
 
   const load = useCallback(() => {
     const token = localStorage.getItem("token");
@@ -139,6 +143,21 @@ export default function DashboardPage() {
   }, [load]);
 
   useLiveReload(Boolean(overview), load);
+
+  async function askInfrastructureAI() {
+    const question = aiQuestion.trim();
+    if (!question) return;
+    setAiLoading(true);
+    setAiError("");
+    try {
+      const result = await api.llm.infrastructure({ question });
+      setAiAnswer(result.answer);
+    } catch (err: unknown) {
+      setAiError(err instanceof Error ? err.message : "LLM-анализ инфраструктуры не удался");
+    } finally {
+      setAiLoading(false);
+    }
+  }
 
   if (error) return <Layout><div className="p-6 text-[#f87171]">{error}</div></Layout>;
   if (!overview) return <Layout><div className="p-6 font-mono text-sm text-[#4a5170]">Загружаю обзор инфраструктуры...</div></Layout>;
@@ -202,6 +221,34 @@ export default function DashboardPage() {
           <StatCard label="Открытые порты" value={formatNumber(overview.ports.total || openPorts)} sub={`${unexpectedPorts} неожиданных · ${publicPorts} публичных`} color="#fbbf24" />
           <StatCard label="Алерты" value={formatNumber(warningCount)} sub={warningCount ? "нужна проверка" : "всё чисто"} color={warningCount ? "#f87171" : "#4ade80"} />
           <StatCard label="Обновлено" value={lastUpdate ? formatRelativeTime(lastUpdate).replace(" назад", "") : "-"} sub={formatDateTime(lastUpdate)} color="#4ade80" />
+        </div>
+
+        <div>
+          <SectionTitle>LLM-анализ VPS</SectionTitle>
+          <Card className="p-4">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-start">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-[#1d2135] bg-[#10131d] text-[#a78bfa]">
+                <Bot size={18} />
+              </div>
+              <div className="min-w-0 flex-1 space-y-3">
+                <textarea
+                  value={aiQuestion}
+                  onChange={(event) => setAiQuestion(event.target.value)}
+                  className="min-h-[84px] w-full rounded-lg border border-[#1d2135] bg-[#0c0e16] px-3 py-2.5 text-sm text-[#dde2f0] outline-none transition placeholder:text-[#2a3355] focus:border-[#a78bfa]/70"
+                  placeholder="Спроси про VPS: какие перегружены, что можно убрать, где риск по портам..."
+                />
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                  <SoftButton onClick={askInfrastructureAI} disabled={aiLoading} variant="primary">
+                    {aiLoading ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />}
+                    Спросить по VPS
+                  </SoftButton>
+                  <div className="font-mono text-[10px] text-[#2a3355]">Контекст: ноды, метрики, контейнеры, порты, алерты, события.</div>
+                </div>
+                {aiError && <div className="rounded-lg border border-[#f87171]/20 bg-[#f87171]/[0.07] p-3 font-mono text-xs text-[#f87171]">{aiError}</div>}
+                {aiAnswer && <div className="whitespace-pre-wrap rounded-lg border border-[#1a1d2e] bg-[#10131d] p-4 text-sm leading-6 text-[#dde2f0]">{aiAnswer}</div>}
+              </div>
+            </div>
+          </Card>
         </div>
 
         <div className="grid gap-4 xl:grid-cols-[1fr_360px]">

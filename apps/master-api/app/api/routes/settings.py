@@ -5,12 +5,15 @@ from pydantic import BaseModel, Field
 
 from app.api.deps import CurrentAdmin, DB
 from app.services.app_settings import (
+    get_llm_settings_payload,
     get_sub_proxy_settings_payload,
     get_telegram_bot_settings,
+    save_llm_settings,
     save_sub_proxy_settings,
     save_telegram_bot_settings,
 )
 from app.services.audit import log_action
+from app.services.llm import LLMClientError, call_llm
 from app.services.sub_proxy import SubProxyClientError, request_sub_proxy
 
 router = APIRouter(prefix="/settings", tags=["settings"])
@@ -23,7 +26,19 @@ class SubProxyConnectionSettingsUpdate(BaseModel):
     timeout_seconds: int = Field(default=10, ge=1, le=120)
 
 
+class LLMSettingsUpdate(BaseModel):
+    base_url: str = ""
+    api_key: str | None = None
+    clear_api_key: bool = False
+    model: str = ""
+    timeout_seconds: int = Field(default=60, ge=5, le=180)
+
+
 def _raise_subproxy_error(exc: SubProxyClientError):
+    raise HTTPException(status_code=exc.status_code, detail=exc.message)
+
+
+def _raise_llm_error(exc: LLMClientError):
     raise HTTPException(status_code=exc.status_code, detail=exc.message)
 
 
@@ -60,6 +75,45 @@ async def test_sub_proxy_settings(_: CurrentAdmin, db: DB):
     except SubProxyClientError as exc:
         _raise_subproxy_error(exc)
     return {"ok": True, "status": status}
+
+
+@router.get("/llm")
+async def get_llm(_: CurrentAdmin, db: DB):
+    return await get_llm_settings_payload(db)
+
+
+@router.put("/llm")
+async def update_llm(body: LLMSettingsUpdate, user: CurrentAdmin, db: DB):
+    result = await save_llm_settings(db, body.model_dump())
+    await log_action(
+        db,
+        user=user,
+        action="settings.llm.save",
+        target_type="settings",
+        target_id="llm",
+        message="LLM settings updated",
+        details={
+            "base_url": result["base_url"],
+            "model": result["model"],
+            "api_key_set": result["api_key_set"],
+            "timeout_seconds": result["timeout_seconds"],
+        },
+    )
+    await db.commit()
+    return result
+
+
+@router.post("/llm/test")
+async def test_llm_settings(_: CurrentAdmin, db: DB):
+    try:
+        answer, model = await call_llm(
+            db,
+            system_prompt="Ответь одним словом: ok",
+            user_prompt="Проверка подключения. Ответь: ok",
+        )
+    except LLMClientError as exc:
+        _raise_llm_error(exc)
+    return {"ok": True, "model": model, "answer": answer}
 
 
 class TelegramBotSettingsUpdate(BaseModel):

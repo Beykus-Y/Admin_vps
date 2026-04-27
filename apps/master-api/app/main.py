@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import agent, alerts, audit, auth, events, inventory, master, nodes, overview, settings as settings_routes, stream, subproxy, terminal, version
+from app.api.routes import agent, alerts, audit, auth, events, inventory, llm, master, nodes, overview, settings as settings_routes, stream, subproxy, terminal, version
 from app.core.config import settings
 from app.db.base import AsyncSessionLocal
 from app.services.alerts import ensure_default_alert_rules
@@ -47,6 +47,7 @@ app.include_router(version.router, prefix="/api")
 app.include_router(master.router, prefix="/api")
 app.include_router(settings_routes.router, prefix="/api")
 app.include_router(subproxy.router, prefix="/api")
+app.include_router(llm.router, prefix="/api")
 app.include_router(stream.router, prefix="/api")
 app.include_router(terminal.router, prefix="/api")
 

@@ -10,6 +10,7 @@ from app.db.models import AppSetting, Task
 
 SUB_PROXY_SETTING_KEY = "sub_proxy"
 TELEGRAM_BOT_SETTING_KEY = "telegram_bot"
+LLM_SETTING_KEY = "llm"
 
 
 @dataclass
@@ -126,3 +127,36 @@ async def save_sub_proxy_settings(db, payload: dict) -> dict:
 
     await set_setting(db, SUB_PROXY_SETTING_KEY, next_value)
     return await get_sub_proxy_settings_payload(db)
+
+
+async def get_llm_settings(db) -> dict:
+    return await get_setting(db, LLM_SETTING_KEY)
+
+
+async def get_llm_settings_payload(db) -> dict:
+    stored = await get_llm_settings(db)
+    return {
+        "base_url": stored.get("base_url") or "",
+        "api_key_set": bool(stored.get("api_key")),
+        "model": stored.get("model") or "",
+        "timeout_seconds": int(stored.get("timeout_seconds") or 60),
+    }
+
+
+async def save_llm_settings(db, payload: dict) -> dict:
+    current = await get_llm_settings(db)
+    next_value = dict(current)
+
+    if "base_url" in payload:
+        next_value["base_url"] = (payload.get("base_url") or "").strip()
+    if "model" in payload:
+        next_value["model"] = (payload.get("model") or "").strip()
+    if payload.get("api_key"):
+        next_value["api_key"] = str(payload["api_key"]).strip()
+    if payload.get("clear_api_key"):
+        next_value["api_key"] = ""
+    if "timeout_seconds" in payload and payload["timeout_seconds"] is not None:
+        next_value["timeout_seconds"] = int(payload["timeout_seconds"])
+
+    await set_setting(db, LLM_SETTING_KEY, next_value)
+    return await get_llm_settings_payload(db)

@@ -2,11 +2,11 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Bot, CheckCircle2, Loader2, Save, ShieldCheck, Wifi } from "lucide-react";
+import { Bot, BrainCircuit, CheckCircle2, Loader2, Save, ShieldCheck, Wifi } from "lucide-react";
 import clsx from "clsx";
 import Layout from "@/components/Layout";
 import { Card, Pill, SoftButton } from "@/components/ui";
-import { api, Node, SubProxyConnectionSettings, TelegramBotSettings } from "@/lib/api";
+import { api, LLMSettings, Node, SubProxyConnectionSettings, TelegramBotSettings } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 
 type Notice = { type: "ok" | "err"; message: string } | null;
@@ -55,6 +55,16 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
 
+  // LLM state
+  const [llmSettings, setLlmSettings] = useState<LLMSettings | null>(null);
+  const [llmBaseUrl, setLlmBaseUrl] = useState("");
+  const [llmApiKey, setLlmApiKey] = useState("");
+  const [llmModel, setLlmModel] = useState("");
+  const [llmTimeoutSeconds, setLlmTimeoutSeconds] = useState("60");
+  const [clearLlmKey, setClearLlmKey] = useState(false);
+  const [savingLlm, setSavingLlm] = useState(false);
+  const [testingLlm, setTestingLlm] = useState(false);
+
   // Telegram Bot state
   const [botSettings, setBotSettings] = useState<TelegramBotSettings | null>(null);
   const [nodes, setNodes] = useState<Node[]>([]);
@@ -69,14 +79,19 @@ export default function SettingsPage() {
   const loadSettings = useCallback(async () => {
     setLoading(true);
     try {
-      const [subProxyData, botData, nodesData] = await Promise.all([
+      const [subProxyData, llmData, botData, nodesData] = await Promise.all([
         api.settings.subProxy(),
+        api.settings.llm(),
         api.settings.telegramBot(),
         api.nodes.list(),
       ]);
       setSettings(subProxyData);
       setBaseUrl(subProxyData.base_url);
       setTimeoutSeconds(String(subProxyData.timeout_seconds));
+      setLlmSettings(llmData);
+      setLlmBaseUrl(llmData.base_url);
+      setLlmModel(llmData.model);
+      setLlmTimeoutSeconds(String(llmData.timeout_seconds));
       setBotSettings(botData);
       setBotRunnerNodeId(botData.runner_node_id ?? "");
       setAllowedChatIds((botData.allowed_chat_ids ?? []).join(", "));
@@ -136,6 +151,44 @@ export default function SettingsPage() {
       setNotice({ type: "err", message: err instanceof Error ? err.message : "Sub Proxy не отвечает" });
     } finally {
       setTesting(false);
+    }
+  }
+
+  async function saveLlmSettings() {
+    setSavingLlm(true);
+    try {
+      const parsedTimeout = Number.parseInt(llmTimeoutSeconds, 10);
+      if (Number.isNaN(parsedTimeout) || parsedTimeout < 5 || parsedTimeout > 180) {
+        setNotice({ type: "err", message: "LLM timeout должен быть от 5 до 180 секунд" });
+        return;
+      }
+      const result = await api.settings.saveLLM({
+        base_url: llmBaseUrl.trim(),
+        api_key: llmApiKey.trim() || null,
+        clear_api_key: clearLlmKey,
+        model: llmModel.trim(),
+        timeout_seconds: parsedTimeout,
+      });
+      setLlmSettings(result);
+      setLlmApiKey("");
+      setClearLlmKey(false);
+      setNotice({ type: "ok", message: "LLM настройки сохранены" });
+    } catch (err: unknown) {
+      setNotice({ type: "err", message: err instanceof Error ? err.message : "Не удалось сохранить LLM настройки" });
+    } finally {
+      setSavingLlm(false);
+    }
+  }
+
+  async function testLlmConnection() {
+    setTestingLlm(true);
+    try {
+      await api.settings.testLLM();
+      setNotice({ type: "ok", message: "LLM отвечает" });
+    } catch (err: unknown) {
+      setNotice({ type: "err", message: err instanceof Error ? err.message : "LLM не отвечает" });
+    } finally {
+      setTestingLlm(false);
     }
   }
 
@@ -249,6 +302,82 @@ export default function SettingsPage() {
               <div className="flex justify-between gap-3">
                 <span className="text-[#4a5170]">Timeout</span>
                 <span className="text-[#dde2f0]">{settings?.timeout_seconds ?? 10} сек</span>
+              </div>
+            </div>
+          </Card>
+        </div>
+
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
+          <Card className="p-4">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <BrainCircuit size={17} className="text-[#a78bfa]" />
+                <div className="text-sm font-semibold text-[#e8eaf6]">LLM</div>
+              </div>
+              <Pill color={llmSettings?.base_url && llmSettings?.model ? "green" : "yellow"}>
+                {llmSettings?.base_url && llmSettings?.model ? "настроено" : "не настроено"}
+              </Pill>
+            </div>
+
+            <div className="grid gap-4 lg:grid-cols-2">
+              <Field label="Base URL">
+                <TextInput value={llmBaseUrl} onChange={setLlmBaseUrl} placeholder="https://api.openai.com/v1" />
+              </Field>
+              <Field label="Model">
+                <TextInput value={llmModel} onChange={setLlmModel} placeholder="gpt-4o-mini или openai/gpt-5.5" />
+              </Field>
+              <Field label="API key">
+                <TextInput value={llmApiKey} onChange={setLlmApiKey} type="password" placeholder={llmSettings?.api_key_set ? "ключ задан" : "ключ не задан"} />
+              </Field>
+              <Field label="Timeout, сек">
+                <TextInput value={llmTimeoutSeconds} onChange={setLlmTimeoutSeconds} type="number" />
+              </Field>
+              <label className="flex items-end gap-2 pb-2 text-sm text-[#8892b0]">
+                <input
+                  type="checkbox"
+                  checked={clearLlmKey}
+                  onChange={(event) => setClearLlmKey(event.target.checked)}
+                  className="h-4 w-4 rounded border-[#252a40] bg-[#111420] text-[#4ade80]"
+                />
+                очистить ключ
+              </label>
+            </div>
+
+            <div className="mt-5 flex flex-col gap-2 sm:flex-row">
+              <SoftButton onClick={saveLlmSettings} disabled={savingLlm} variant="primary">
+                {savingLlm ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}
+                Сохранить LLM
+              </SoftButton>
+              <SoftButton onClick={testLlmConnection} disabled={testingLlm} variant="blue">
+                {testingLlm ? <Loader2 size={15} className="animate-spin" /> : <Wifi size={15} />}
+                Проверить LLM
+              </SoftButton>
+            </div>
+          </Card>
+
+          <Card className="p-4">
+            <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.14em] text-[#4a5170]">
+              <CheckCircle2 size={13} className={llmSettings?.base_url && llmSettings?.model ? "text-[#4ade80]" : "text-[#fbbf24]"} />
+              Состояние LLM
+            </div>
+            <div className="mt-3 space-y-2 font-mono text-xs">
+              <div className="flex justify-between gap-3">
+                <span className="text-[#4a5170]">URL</span>
+                <span className="truncate text-[#dde2f0]">{llmSettings?.base_url || "не задан"}</span>
+              </div>
+              <div className="flex justify-between gap-3">
+                <span className="text-[#4a5170]">Model</span>
+                <span className="truncate text-[#dde2f0]">{llmSettings?.model || "не задана"}</span>
+              </div>
+              <div className="flex justify-between gap-3">
+                <span className="text-[#4a5170]">API key</span>
+                <span className={llmSettings?.api_key_set ? "text-[#4ade80]" : "text-[#fbbf24]"}>
+                  {llmSettings?.api_key_set ? "задан" : "не задан"}
+                </span>
+              </div>
+              <div className="flex justify-between gap-3">
+                <span className="text-[#4a5170]">Timeout</span>
+                <span className="text-[#dde2f0]">{llmSettings?.timeout_seconds ?? 60} сек</span>
               </div>
             </div>
           </Card>
