@@ -357,6 +357,26 @@ export interface SubProxyNodeFilter {
   allowed_configs: string[];
 }
 
+export type SubProxyNodeImportance = "normal" | "core" | "backup" | "test" | "deprecated";
+
+export interface SubProxyNodeSetting {
+  node_key?: string;
+  node_id: number | null;
+  node_name: string;
+  node_address: string;
+  billing_group: string;
+  provider: string;
+  location: string;
+  monthly_cost: number | null;
+  currency: string;
+  traffic_included_gb: number | null;
+  traffic_price_per_tb: number | null;
+  importance: SubProxyNodeImportance;
+  can_remove: boolean;
+  note: string;
+  updated_at?: number;
+}
+
 export interface SubProxyUsageRow {
   node_id: number | null;
   node_name: string;
@@ -541,6 +561,9 @@ export const api = {
     nodeFilters: () => request<Record<string, SubProxyNodeFilter>>("/subproxy/node-filters"),
     saveNodeFilters: (payload: Record<string, SubProxyNodeFilter>) =>
       request<{ ok: boolean }>("/subproxy/node-filters", { method: "POST", body: JSON.stringify(payload) }),
+    nodeSettings: () => request<Record<string, SubProxyNodeSetting>>("/subproxy/node-settings"),
+    saveNodeSetting: (payload: SubProxyNodeSetting) =>
+      request<SubProxyNodeSetting>("/subproxy/node-settings", { method: "POST", body: JSON.stringify(payload) }),
     settings: () => request<SubProxySettings>("/subproxy/settings"),
     saveSettings: (payload: SubProxySettings) =>
       request<{ ok: boolean }>("/subproxy/settings", { method: "POST", body: JSON.stringify(payload) }),

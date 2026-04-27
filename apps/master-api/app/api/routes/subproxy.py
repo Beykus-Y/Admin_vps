@@ -37,6 +37,22 @@ class SubProxyNodeFilter(BaseModel):
     allowed_configs: list[str] = Field(default_factory=list)
 
 
+class SubProxyNodeSetting(BaseModel):
+    node_id: int | None = None
+    node_name: str = Field(default="", max_length=128)
+    node_address: str = Field(default="", max_length=256)
+    billing_group: str = Field(default="", max_length=128)
+    provider: str = Field(default="", max_length=64)
+    location: str = Field(default="", max_length=64)
+    monthly_cost: float | None = Field(default=None, ge=0)
+    currency: str = Field(default="USD", max_length=8)
+    traffic_included_gb: float | None = Field(default=None, ge=0)
+    traffic_price_per_tb: float | None = Field(default=None, ge=0)
+    importance: Literal["normal", "core", "backup", "test", "deprecated"] = "normal"
+    can_remove: bool = True
+    note: str = Field(default="", max_length=512)
+
+
 class SubProxyPerUserConfigMap(RootModel[dict[str, list[SubProxyPerUserConfigItem]]]):
     pass
 
@@ -302,6 +318,44 @@ async def save_node_filters(body: SubProxyNodeFilterMap, user: CurrentOperator, 
         target_type="subproxy.node_filters",
         message="Sub Proxy node filters saved",
         details={"users": list(payload.keys())},
+    )
+    await db.commit()
+    return result
+
+
+@router.get("/node-settings")
+async def get_node_settings(_: CurrentUser, db: DB):
+    try:
+        return await request_sub_proxy("GET", "/node-settings", db=db)
+    except SubProxyClientError as exc:
+        _raise_subproxy_error(exc)
+
+
+@router.post("/node-settings")
+async def save_node_setting(body: SubProxyNodeSetting, user: CurrentOperator, db: DB):
+    payload = body.model_dump()
+    payload["currency"] = payload["currency"].strip().upper() or "USD"
+    try:
+        result = await request_sub_proxy("POST", "/node-settings", db=db, payload=payload)
+    except SubProxyClientError as exc:
+        _raise_subproxy_error(exc)
+
+    await log_action(
+        db,
+        user=user,
+        action="subproxy.node_settings.save",
+        target_type="subproxy.node_settings",
+        target_id=str(body.node_id) if body.node_id is not None else body.node_name,
+        message=f"Sub Proxy node settings saved: {body.node_name or body.node_id}",
+        details={
+            "node_id": body.node_id,
+            "node_name": body.node_name,
+            "billing_group": body.billing_group,
+            "provider": body.provider,
+            "location": body.location,
+            "importance": body.importance,
+            "can_remove": body.can_remove,
+        },
     )
     await db.commit()
     return result

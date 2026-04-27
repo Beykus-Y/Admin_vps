@@ -28,8 +28,10 @@ import { Card, Pill, SearchBar, SectionTitle, SoftButton, StatCard } from "@/com
 import {
   api,
   SubProxyNamedConfig,
+  SubProxyNode,
   SubProxyInbounds,
   SubProxyNodeFilter,
+  SubProxyNodeSetting,
   SubProxySettings,
   SubProxyStatus,
   SubProxyStoredConfig,
@@ -93,6 +95,51 @@ function gbInputToBytes(value: string): number | null {
   const parsed = Number.parseFloat(value.replace(",", "."));
   if (!Number.isFinite(parsed) || parsed <= 0) return null;
   return Math.round(parsed * 1024 * 1024 * 1024);
+}
+
+function nullableNumberInput(value: string): number | null {
+  const trimmed = value.trim().replace(",", ".");
+  if (!trimmed) return null;
+  const parsed = Number.parseFloat(trimmed);
+  if (!Number.isFinite(parsed) || parsed < 0) return null;
+  return parsed;
+}
+
+function moneyLabel(value: number | null | undefined, currency = "USD"): string {
+  if (value == null || !Number.isFinite(value)) return "—";
+  return `${value.toLocaleString("ru-RU", { maximumFractionDigits: 2 })} ${currency || "USD"}`;
+}
+
+function nodeSettingKey(nodeId: number | null | undefined): string {
+  return nodeId == null ? "null" : String(nodeId);
+}
+
+function defaultNodeSetting(node: SubProxyNode): SubProxyNodeSetting {
+  return {
+    node_id: node.id,
+    node_name: node.name,
+    node_address: node.address,
+    billing_group: "",
+    provider: "",
+    location: "",
+    monthly_cost: null,
+    currency: "USD",
+    traffic_included_gb: null,
+    traffic_price_per_tb: null,
+    importance: "normal",
+    can_remove: true,
+    note: "",
+  };
+}
+
+function importanceLabel(value: SubProxyNodeSetting["importance"]): string {
+  return {
+    normal: "обычная",
+    core: "важная",
+    backup: "backup",
+    test: "test",
+    deprecated: "к выводу",
+  }[value];
 }
 
 function dateInputToUnix(value: string): number | null {
@@ -239,6 +286,7 @@ export default function SubscriptionsPage() {
   const [inbounds, setInbounds] = useState<SubProxyInbounds>({});
   const [perUserConfigsMap, setPerUserConfigsMap] = useState<Record<string, SubProxyNamedConfig[]>>({});
   const [nodeFilters, setNodeFilters] = useState<Record<string, SubProxyNodeFilter>>({});
+  const [nodeSettings, setNodeSettings] = useState<Record<string, SubProxyNodeSetting>>({});
   const [settings, setSettings] = useState<SubProxySettings>({ sub_update_interval: null });
   const [settingsInput, setSettingsInput] = useState("");
   const [selectedUsername, setSelectedUsername] = useState("");
@@ -255,6 +303,7 @@ export default function SubscriptionsPage() {
   const [detailsError, setDetailsError] = useState("");
   const [savingFilters, setSavingFilters] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
+  const [savingNodeSetting, setSavingNodeSetting] = useState(false);
   const [savingUserAction, setSavingUserAction] = useState(false);
   const [inboundsLoading, setInboundsLoading] = useState(false);
   const [savingGlobalConfig, setSavingGlobalConfig] = useState(false);
@@ -286,12 +335,13 @@ export default function SubscriptionsPage() {
     else setRefreshing(true);
 
     try {
-      const [statusData, usersData, configsData, perUserData, nodeFilterData, settingsData] = await Promise.all([
+      const [statusData, usersData, configsData, perUserData, nodeFilterData, nodeSettingsData, settingsData] = await Promise.all([
         api.subProxy.status(),
         api.subProxy.users({ limit: 500 }),
         api.subProxy.configs(),
         api.subProxy.perUserConfigs(),
         api.subProxy.nodeFilters(),
+        api.subProxy.nodeSettings(),
         api.subProxy.settings(),
       ]);
 
@@ -300,6 +350,7 @@ export default function SubscriptionsPage() {
       setGlobalConfigs(configsData);
       setPerUserConfigsMap(perUserData);
       setNodeFilters(nodeFilterData);
+      setNodeSettings(nodeSettingsData);
       setSettings(settingsData);
       setSettingsInput(settingsData.sub_update_interval == null ? "" : String(settingsData.sub_update_interval));
       setSelectedUsername((current) => {
@@ -718,6 +769,42 @@ export default function SubscriptionsPage() {
     }
   }
 
+  function nodeSettingFor(node: SubProxyNode): SubProxyNodeSetting {
+    return { ...defaultNodeSetting(node), ...(nodeSettings[nodeSettingKey(node.id)] ?? {}) };
+  }
+
+  function updateNodeSettingDraft(node: SubProxyNode, patch: Partial<SubProxyNodeSetting>) {
+    const key = nodeSettingKey(node.id);
+    setNodeSettings((current) => ({
+      ...current,
+      [key]: {
+        ...defaultNodeSetting(node),
+        ...(current[key] ?? {}),
+        ...patch,
+        node_id: node.id,
+        node_name: node.name,
+        node_address: node.address,
+      },
+    }));
+  }
+
+  async function saveNodeSetting(node: SubProxyNode) {
+    const setting = nodeSettingFor(node);
+    setSavingNodeSetting(true);
+    try {
+      const saved = await api.subProxy.saveNodeSetting({
+        ...setting,
+        currency: (setting.currency || "USD").trim().toUpperCase(),
+      });
+      setNodeSettings((current) => ({ ...current, [nodeSettingKey(node.id)]: saved }));
+      showSuccess(`Настройки ноды ${node.name} сохранены`);
+    } catch (err: unknown) {
+      showError(err instanceof Error ? err.message : "Не удалось сохранить настройки ноды");
+    } finally {
+      setSavingNodeSetting(false);
+    }
+  }
+
   if (loading) {
     return (
       <Layout>
@@ -785,6 +872,103 @@ export default function SubscriptionsPage() {
           <StatCard label="С фильтром" value={formatNumber(status?.counts.filtered_users ?? 0)} sub="режим частичной подписки" color="#fbbf24" />
           <StatCard label="Extra конфиги" value={formatNumber(status?.counts.per_user_configs ?? 0)} sub={`${status?.counts.global_enabled_configs ?? 0} глобально включено`} color="#818cf8" />
           <StatCard label="Ноды" value={formatNumber(status?.nodes.length ?? 0)} sub={`${onlineNodes} онлайн`} color={onlineNodes > 0 ? "#4ade80" : "#4a5170"} />
+        </div>
+
+        <div>
+          <SectionTitle>Настройки нод и тарификации</SectionTitle>
+          <Card className="p-4">
+            {!status?.nodes.length ? (
+              <div className="font-mono text-xs text-[#2a3355]">Marzban ноды не найдены.</div>
+            ) : (
+              <div className="grid gap-3 xl:grid-cols-2">
+                {status.nodes.map((node) => {
+                  const setting = nodeSettingFor(node);
+                  return (
+                    <div key={node.id ?? node.name} className="rounded-lg border border-[#1a1d2e] bg-[#0c0e16] p-4">
+                      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Server size={14} className={node.status === "connected" ? "text-[#4ade80]" : "text-[#f87171]"} />
+                            <span className="truncate text-sm font-semibold text-[#e8eaf6]">{node.name}</span>
+                            <Pill color={node.status === "connected" ? "green" : "red"}>{node.status}</Pill>
+                            <Pill color={setting.can_remove ? "green" : "red"}>{setting.can_remove ? "можно убрать" : "не трогать"}</Pill>
+                          </div>
+                          <div className="mt-1 font-mono text-[10px] text-[#2a3355]">{node.address}:{node.port ?? "?"}</div>
+                        </div>
+                        <div className="text-right font-mono text-xs text-[#dde2f0]">
+                          <div>{moneyLabel(setting.monthly_cost, setting.currency)} / мес</div>
+                          <div className="mt-1 text-[10px] text-[#4a5170]">{setting.traffic_price_per_tb == null ? "трафик неизвестен" : `${moneyLabel(setting.traffic_price_per_tb, setting.currency)} / TB`}</div>
+                        </div>
+                      </div>
+
+                      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                        <Field label="Провайдер">
+                          <TextInput value={setting.provider} onChange={(value) => updateNodeSettingDraft(node, { provider: value })} placeholder="Yandex Cloud" disabled={!canEdit} />
+                        </Field>
+                        <Field label="Локация">
+                          <TextInput value={setting.location} onChange={(value) => updateNodeSettingDraft(node, { location: value })} placeholder="RU, Moscow" disabled={!canEdit} />
+                        </Field>
+                        <Field label="Группа тарификации">
+                          <TextInput value={setting.billing_group} onChange={(value) => updateNodeSettingDraft(node, { billing_group: value })} placeholder="Yandex Cloud" disabled={!canEdit} />
+                        </Field>
+                        <Field label="VPS / месяц">
+                          <TextInput value={setting.monthly_cost == null ? "" : String(setting.monthly_cost)} onChange={(value) => updateNodeSettingDraft(node, { monthly_cost: nullableNumberInput(value) })} placeholder="435" type="number" disabled={!canEdit} />
+                        </Field>
+                        <Field label="Валюта">
+                          <TextInput value={setting.currency} onChange={(value) => updateNodeSettingDraft(node, { currency: value.toUpperCase() })} placeholder="RUB" disabled={!canEdit} />
+                        </Field>
+                        <Field label="Цена / TB">
+                          <TextInput value={setting.traffic_price_per_tb == null ? "" : String(setting.traffic_price_per_tb)} onChange={(value) => updateNodeSettingDraft(node, { traffic_price_per_tb: nullableNumberInput(value) })} placeholder="1370" type="number" disabled={!canEdit} />
+                        </Field>
+                        <Field label="Включено, GB">
+                          <TextInput value={setting.traffic_included_gb == null ? "" : String(setting.traffic_included_gb)} onChange={(value) => updateNodeSettingDraft(node, { traffic_included_gb: nullableNumberInput(value) })} placeholder="пусто = неизвестно" type="number" disabled={!canEdit} />
+                        </Field>
+                        <Field label="Роль">
+                          <select
+                            value={setting.importance}
+                            disabled={!canEdit}
+                            onChange={(event) => updateNodeSettingDraft(node, { importance: event.target.value as SubProxyNodeSetting["importance"] })}
+                            className="w-full rounded-lg border border-[#1d2135] bg-[#0c0e16] px-3 py-2.5 text-sm text-[#dde2f0] outline-none transition focus:border-[#4ade80]/70 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            <option value="normal">{importanceLabel("normal")}</option>
+                            <option value="core">{importanceLabel("core")}</option>
+                            <option value="backup">{importanceLabel("backup")}</option>
+                            <option value="test">{importanceLabel("test")}</option>
+                            <option value="deprecated">{importanceLabel("deprecated")}</option>
+                          </select>
+                        </Field>
+                        <label className="flex items-end gap-2 pb-2 text-sm text-[#8892b0]">
+                          <input
+                            type="checkbox"
+                            checked={setting.can_remove}
+                            disabled={!canEdit}
+                            onChange={(event) => updateNodeSettingDraft(node, { can_remove: event.target.checked })}
+                            className="h-4 w-4 rounded border-[#252a40] bg-[#111420] text-[#4ade80]"
+                          />
+                          можно рассматривать к удалению
+                        </label>
+                      </div>
+
+                      <div className="mt-3">
+                        <Field label="Заметка">
+                          <TextInput value={setting.note} onChange={(value) => updateNodeSettingDraft(node, { note: value })} placeholder="например: Yandex считает трафик общей группой" disabled={!canEdit} />
+                        </Field>
+                      </div>
+
+                      {canEdit && (
+                        <div className="mt-4 flex justify-end">
+                          <SoftButton onClick={() => saveNodeSetting(node)} disabled={savingNodeSetting} variant="primary">
+                            {savingNodeSetting ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}
+                            Сохранить ноду
+                          </SoftButton>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </Card>
         </div>
 
         <div className="flex flex-col gap-3 xl:flex-row xl:items-center">
