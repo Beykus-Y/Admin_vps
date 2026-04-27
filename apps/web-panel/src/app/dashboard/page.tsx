@@ -246,6 +246,7 @@ export default function DashboardPage() {
                   </SoftButton>
                   <div className="font-mono text-[10px] text-[#2a3355]">Контекст: ноды, метрики, контейнеры, порты, алерты, события.</div>
                 </div>
+                {aiLoading && <div className="font-mono text-[10px] text-[#5c6687]">LLM собирает данные и может вызывать read-only tools. Максимум ожидания: около 3 минут.</div>}
                 {aiError && <div className="rounded-lg border border-[#f87171]/20 bg-[#f87171]/[0.07] p-3 font-mono text-xs text-[#f87171]">{aiError}</div>}
                 {aiAnswer && <MarkdownAnswer>{aiAnswer}</MarkdownAnswer>}
               </div>

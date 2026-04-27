@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import time
 import uuid
 from collections import Counter, defaultdict
 from datetime import UTC, datetime, timedelta
@@ -18,6 +20,12 @@ from app.services.llm import LLMClientError, call_llm_message, compact_json
 from app.services.sub_proxy import SubProxyClientError, request_sub_proxy
 
 router = APIRouter(prefix="/llm", tags=["llm"])
+logger = logging.getLogger("uvicorn.error")
+
+LLM_ANALYSIS_TIMEOUT_SECONDS = 180
+LLM_MAX_TOOL_ROUNDS = 3
+LLM_MAX_TOOL_CALLS_PER_ROUND = 3
+LLM_TOOL_TIMEOUT_SECONDS = 45
 
 
 class LLMAskRequest(BaseModel):
@@ -177,9 +185,10 @@ def _vpn_user_summary(users: list[dict]) -> dict:
     }
 
 
-async def _deep_node_user_usage(db, users: list[dict], params: dict[str, str]) -> dict:
+async def _deep_node_user_usage(db, users: list[dict], params: dict[str, str], *, sample_limit: int = 40) -> dict:
     candidates = [user for user in users if (user.get("used_traffic") or 0) > 0 and user.get("status") in {"active", "limited"}]
-    candidates = _top(candidates, lambda item: item.get("used_traffic") or 0, limit=100)
+    sample_limit = max(1, min(sample_limit, 100))
+    candidates = _top(candidates, lambda item: item.get("used_traffic") or 0, limit=sample_limit)
     semaphore = asyncio.Semaphore(8)
 
     async def load_user(username: str):
@@ -249,8 +258,8 @@ async def _vpn_context(db, *, period: str, deep_user_usage: bool) -> dict:
     }
 
     if deep_user_usage:
-        context["sampled_user_node_usage"] = await _deep_node_user_usage(db, users, params)
-        context["limitations"].append("Per-node user averages are calculated from top active/limited users by total traffic, capped at 100 users.")
+        context["sampled_user_node_usage"] = await _deep_node_user_usage(db, users, params, sample_limit=50)
+        context["limitations"].append("Per-node user averages are calculated from top active/limited users by total traffic, capped at 50 users.")
     else:
         context["limitations"].append("Per-node unique-user averages are not calculated unless deep_user_usage=true.")
 
@@ -264,16 +273,21 @@ def _tool_content(data) -> str:
     return value
 
 
-async def _run_tool_loop(db, *, system_prompt: str, user_prompt: str, tools: list[dict], executor) -> tuple[str, str]:
+async def _run_tool_loop(db, *, scope: str, system_prompt: str, user_prompt: str, tools: list[dict], executor) -> tuple[str, str]:
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
     ]
     model = ""
-    for _ in range(5):
+    started_at = time.perf_counter()
+    logger.info("LLM %s analysis started", scope)
+    for round_index in range(LLM_MAX_TOOL_ROUNDS):
+        logger.info("LLM %s round %s request started", scope, round_index + 1)
         message, model = await call_llm_message(db, messages=messages, tools=tools)
         tool_calls = message.get("tool_calls") or []
+        logger.info("LLM %s round %s completed with %s tool call(s)", scope, round_index + 1, len(tool_calls))
         if not tool_calls:
+            logger.info("LLM %s analysis finished in %.1fs", scope, time.perf_counter() - started_at)
             return str(message.get("content") or "").strip(), model
 
         messages.append({
@@ -281,7 +295,7 @@ async def _run_tool_loop(db, *, system_prompt: str, user_prompt: str, tools: lis
             "content": message.get("content"),
             "tool_calls": tool_calls,
         })
-        for call in tool_calls:
+        for call in tool_calls[:LLM_MAX_TOOL_CALLS_PER_ROUND]:
             function = call.get("function") or {}
             name = function.get("name") or ""
             try:
@@ -289,17 +303,32 @@ async def _run_tool_loop(db, *, system_prompt: str, user_prompt: str, tools: lis
             except ValueError:
                 arguments = {}
             try:
-                result = await executor(name, arguments)
+                logger.info("LLM %s tool %s started", scope, name)
+                tool_started_at = time.perf_counter()
+                result = await asyncio.wait_for(executor(name, arguments), timeout=LLM_TOOL_TIMEOUT_SECONDS)
+                logger.info("LLM %s tool %s finished in %.1fs", scope, name, time.perf_counter() - tool_started_at)
+            except asyncio.TimeoutError:
+                logger.warning("LLM %s tool %s timed out after %ss", scope, name, LLM_TOOL_TIMEOUT_SECONDS)
+                result = {"error": f"Tool {name} timed out after {LLM_TOOL_TIMEOUT_SECONDS}s"}
             except Exception as exc:  # noqa: BLE001 - tool errors must be returned to the model
+                logger.warning("LLM %s tool %s failed: %s", scope, name, exc)
                 result = {"error": str(exc)}
             messages.append({
                 "role": "tool",
                 "tool_call_id": call.get("id"),
                 "content": _tool_content(result),
             })
+        for call in tool_calls[LLM_MAX_TOOL_CALLS_PER_ROUND:]:
+            messages.append({
+                "role": "tool",
+                "tool_call_id": call.get("id"),
+                "content": _tool_content({"error": "Skipped: too many tool calls in one round. Ask a narrower question."}),
+            })
 
     messages.append({"role": "user", "content": "Сформируй финальный ответ по уже полученным данным. Если данных недостаточно, так и скажи."})
+    logger.info("LLM %s final answer request started after tool limit", scope)
     message, model = await call_llm_message(db, messages=messages)
+    logger.info("LLM %s analysis finished after tool limit in %.1fs", scope, time.perf_counter() - started_at)
     return str(message.get("content") or "").strip(), model
 
 
@@ -440,7 +469,7 @@ VPN_TOOLS = [
     {"type": "function", "function": {"name": "get_vpn_node_usage", "description": "Read Marzban usage by VPN node for a period.", "parameters": {"type": "object", "properties": {"period": {"type": "string"}}, "required": ["period"]}}},
     {"type": "function", "function": {"name": "get_vpn_users", "description": "Read VPN users list summary.", "parameters": {"type": "object", "properties": {"status": {"type": "string"}, "limit": {"type": "integer", "minimum": 1, "maximum": 1000}}}}},
     {"type": "function", "function": {"name": "get_vpn_user_details", "description": "Read one VPN user details and per-node usage for a period.", "parameters": {"type": "object", "properties": {"username": {"type": "string"}, "period": {"type": "string"}}, "required": ["username"]}}},
-    {"type": "function", "function": {"name": "get_vpn_node_user_breakdown", "description": "Sample per-user traffic breakdown by node for averages and top users.", "parameters": {"type": "object", "properties": {"node_id": {"type": "integer"}, "node_name": {"type": "string"}, "period": {"type": "string"}}}}},
+    {"type": "function", "function": {"name": "get_vpn_node_user_breakdown", "description": "Sample per-user traffic breakdown by node for averages and top users.", "parameters": {"type": "object", "properties": {"node_id": {"type": "integer"}, "node_name": {"type": "string"}, "period": {"type": "string"}, "limit": {"type": "integer", "minimum": 1, "maximum": 100}}}}},
     {"type": "function", "function": {"name": "get_vpn_group_usage", "description": "Calculate usage for a billing group using node_settings.billing_group.", "parameters": {"type": "object", "properties": {"billing_group": {"type": "string"}, "period": {"type": "string"}}, "required": ["billing_group"]}}},
 ]
 
@@ -479,7 +508,8 @@ async def _execute_vpn_tool(db, name: str, arguments: dict) -> dict:
         return {"period": {"label": period_label, "params": params}, **details}
     if name == "get_vpn_node_user_breakdown":
         users_payload = await request_sub_proxy("GET", "/users", db=db, params={"limit": 1000, "offset": 0})
-        breakdown = await _deep_node_user_usage(db, users_payload.get("items") or [], params)
+        limit = max(1, min(int(arguments.get("limit") or 40), 100))
+        breakdown = await _deep_node_user_usage(db, users_payload.get("items") or [], params, sample_limit=limit)
         node_id = arguments.get("node_id")
         node_name = str(arguments.get("node_name") or "").strip().lower()
         if node_id is not None or node_name:
@@ -519,13 +549,20 @@ async def analyze_infrastructure(body: LLMAskRequest, _: CurrentOperator, db: DB
     context = await _infrastructure_context(db)
     prompt = f"Вопрос администратора: {body.question}\n\nBASE_CONTEXT_INFRASTRUCTURE={compact_json(context)}"
     try:
-        answer, model = await _run_tool_loop(
-            db,
-            system_prompt=INFRA_SYSTEM_PROMPT,
-            user_prompt=prompt,
-            tools=INFRA_TOOLS,
-            executor=lambda name, arguments: _execute_infra_tool(db, name, arguments),
+        answer, model = await asyncio.wait_for(
+            _run_tool_loop(
+                db,
+                scope="infrastructure",
+                system_prompt=INFRA_SYSTEM_PROMPT,
+                user_prompt=prompt,
+                tools=INFRA_TOOLS,
+                executor=lambda name, arguments: _execute_infra_tool(db, name, arguments),
+            ),
+            timeout=LLM_ANALYSIS_TIMEOUT_SECONDS,
         )
+    except asyncio.TimeoutError:
+        logger.warning("LLM infrastructure analysis timed out after %ss", LLM_ANALYSIS_TIMEOUT_SECONDS)
+        raise HTTPException(status_code=504, detail="LLM-анализ VPS превысил лимит времени. Попробуйте сузить вопрос или снизить timeout модели.")
     except LLMClientError as exc:
         _raise_llm_error(exc)
     return {"scope": "infrastructure", "model": model, "answer": answer, "sources": ["FilinControl inventory", "metrics", "ports", "containers", "events", "alerts", "read-only agent diagnostics"]}
@@ -539,13 +576,20 @@ async def analyze_vpn(body: LLMAskRequest, _: CurrentOperator, db: DB):
         raise HTTPException(status_code=exc.status_code, detail=exc.message)
     prompt = f"Вопрос администратора: {body.question}\n\nCONTEXT_VPN={compact_json(context)}"
     try:
-        answer, model = await _run_tool_loop(
-            db,
-            system_prompt=VPN_SYSTEM_PROMPT,
-            user_prompt=prompt,
-            tools=VPN_TOOLS,
-            executor=lambda name, arguments: _execute_vpn_tool(db, name, arguments),
+        answer, model = await asyncio.wait_for(
+            _run_tool_loop(
+                db,
+                scope="vpn",
+                system_prompt=VPN_SYSTEM_PROMPT,
+                user_prompt=prompt,
+                tools=VPN_TOOLS,
+                executor=lambda name, arguments: _execute_vpn_tool(db, name, arguments),
+            ),
+            timeout=LLM_ANALYSIS_TIMEOUT_SECONDS,
         )
+    except asyncio.TimeoutError:
+        logger.warning("LLM VPN analysis timed out after %ss", LLM_ANALYSIS_TIMEOUT_SECONDS)
+        raise HTTPException(status_code=504, detail="LLM-анализ VPN превысил лимит времени. Попробуйте сузить вопрос или выключить глубокий анализ пользователей.")
     except LLMClientError as exc:
         _raise_llm_error(exc)
     return {"scope": "vpn", "model": model, "answer": answer, "sources": ["Marzban via MGBoost", "MGBoost node settings", "MGBoost device/request metadata", "read-only VPN analytics tools"]}

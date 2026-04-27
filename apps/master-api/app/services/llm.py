@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import time
 
 import httpx
 
@@ -12,6 +14,9 @@ class LLMClientError(Exception):
         super().__init__(message)
         self.status_code = status_code
         self.message = message
+
+
+logger = logging.getLogger("uvicorn.error")
 
 
 def _chat_completions_url(base_url: str) -> str:
@@ -44,11 +49,17 @@ async def call_llm_message(db, *, messages: list[dict], tools: list[dict] | None
         payload["tools"] = tools
         payload["tool_choice"] = "auto"
 
+    started_at = time.perf_counter()
+    logger.info("LLM provider request started model=%s messages=%s tools=%s timeout=%ss", model, len(messages), bool(tools), timeout_seconds)
     try:
         async with httpx.AsyncClient(timeout=timeout_seconds) as client:
             response = await client.post(_chat_completions_url(base_url), headers=headers, json=payload)
     except httpx.RequestError as exc:
+        logger.warning("LLM provider request failed after %.1fs: %s", time.perf_counter() - started_at, exc)
         raise LLMClientError(502, f"LLM provider is unreachable: {exc}") from exc
+
+    duration = time.perf_counter() - started_at
+    logger.info("LLM provider request finished status=%s in %.1fs", response.status_code, duration)
 
     if response.status_code >= 400:
         try:

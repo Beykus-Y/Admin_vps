@@ -1,5 +1,6 @@
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL || "";
 const VERSION_CACHE_TTL_MS = 60_000;
+const LLM_REQUEST_TIMEOUT_MS = 190_000;
 
 let cachedVersionInfo: VersionInfo | null = null;
 let cachedVersionInfoAt = 0;
@@ -40,20 +41,35 @@ function buildQuery(params: Record<string, string | number | boolean | undefined
   return query ? `?${query}` : "";
 }
 
-async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+async function request<T>(path: string, options: RequestInit = {}, timeoutMs = 0): Promise<T> {
   const token = getToken();
   const headers: HeadersInit = {
     "Content-Type": "application/json",
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
     ...options.headers,
   };
-  const res = await fetch(`${BASE_URL}/api${path}`, { ...options, headers });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail || "Запрос не выполнен");
+  const controller = timeoutMs > 0 ? new AbortController() : null;
+  const timeoutId = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+  try {
+    const res = await fetch(`${BASE_URL}/api${path}`, {
+      ...options,
+      headers,
+      signal: options.signal ?? controller?.signal,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || "Запрос не выполнен");
+    }
+    if (res.status === 204) return undefined as T;
+    return res.json();
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") {
+      throw new Error("Запрос превысил лимит ожидания. Попробуйте сузить вопрос.");
+    }
+    throw err;
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
   }
-  if (res.status === 204) return undefined as T;
-  return res.json();
 }
 
 export type UserRole = "viewer" | "operator" | "admin";
@@ -637,9 +653,9 @@ export const api = {
 
   llm: {
     infrastructure: (payload: { question: string }) =>
-      request<LLMAnalysisResponse>("/llm/infrastructure", { method: "POST", body: JSON.stringify(payload) }),
+      request<LLMAnalysisResponse>("/llm/infrastructure", { method: "POST", body: JSON.stringify(payload) }, LLM_REQUEST_TIMEOUT_MS),
     vpn: (payload: { question: string; period: string; deep_user_usage: boolean }) =>
-      request<LLMAnalysisResponse>("/llm/vpn", { method: "POST", body: JSON.stringify(payload) }),
+      request<LLMAnalysisResponse>("/llm/vpn", { method: "POST", body: JSON.stringify(payload) }, LLM_REQUEST_TIMEOUT_MS),
   },
   version: async () => {
     const now = Date.now();
