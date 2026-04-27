@@ -97,13 +97,6 @@ func safeDiagnosticPath(raw string) string {
 	return "/"
 }
 
-func stringPayload(payload map[string]any, key string, fallback string) string {
-	if value, ok := payload[key].(string); ok {
-		return value
-	}
-	return fallback
-}
-
 func intPayload(payload map[string]any, key string, fallback int, minValue int, maxValue int) int {
 	value := fallback
 	switch raw := payload[key].(type) {
